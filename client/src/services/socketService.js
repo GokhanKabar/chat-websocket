@@ -5,10 +5,17 @@ class SocketService {
     this.socket = null;
     this.handlers = {};
     this.currentUserId = null;
+    this.isConnecting = false;
   }
 
   // Initialiser la connexion WebSocket avec le token JWT
   connect(token) {
+    // Prevent multiple connection attempts
+    if (this.isConnecting) {
+      console.log("Connection already in progress, skipping");
+      return;
+    }
+
     if (this.socket) {
       console.log("Socket déjà connecté, déconnexion avant reconnexion");
       this.disconnect();
@@ -18,6 +25,8 @@ class SocketService {
       console.error("Tentative de connexion au WebSocket sans token JWT!");
       return;
     }
+
+    this.isConnecting = true;
 
     // Le token JWT ne doit pas contenir "Bearer" pour socket.io
     // Le serveur s'attend à recevoir juste le token brut
@@ -73,16 +82,19 @@ class SocketService {
         "LocalStorage token:",
         localStorage.getItem("token")?.substring(0, 15) + "..."
       );
+      this.isConnecting = false;
     });
 
     this.socket.on("disconnect", (reason) => {
       console.log(
         `Déconnecté du serveur WebSocket: ${reason}, UserID: ${this.currentUserId}`
       );
+      this.isConnecting = false;
     });
 
     this.socket.on("error", (error) => {
       console.error(`Erreur WebSocket (UserID: ${this.currentUserId}):`, error);
+      this.isConnecting = false;
     });
 
     this.socket.on("connect_error", (error) => {
@@ -90,6 +102,7 @@ class SocketService {
         `Erreur de connexion WebSocket (UserID: ${this.currentUserId}):`,
         error
       );
+      this.isConnecting = false;
     });
 
     // Pour le débogage
@@ -104,21 +117,48 @@ class SocketService {
   // Se déconnecter
   disconnect() {
     if (this.socket) {
-      console.log("Déconnexion du socket");
+      console.log("Déconnexion du socket...");
 
-      // Supprimer d'abord tous les listeners pour éviter les effets de bord
+      // Nettoyer tous les handlers avant la déconnexion
       try {
-        Object.keys(this.handlers).forEach((event) => {
-          this.socket.off(event, this.handlers[event]);
+        // First remove all listeners for socket.io built-in events
+        const builtInEvents = [
+          "connect",
+          "disconnect",
+          "error",
+          "connect_error",
+        ];
+        builtInEvents.forEach((event) => {
+          if (this.socket.hasListeners(event)) {
+            console.log(`Suppression des listeners intégrés pour: ${event}`);
+            this.socket.removeAllListeners(event);
+          }
         });
+
+        // Then remove our custom handlers
+        Object.keys(this.handlers).forEach((event) => {
+          console.log(`Suppression du listener pour l'événement: ${event}`);
+          if (this.socket.hasListeners(event)) {
+            this.socket.off(event, this.handlers[event]);
+          }
+        });
+
+        // Remove any other listeners with removeAllListeners
+        this.socket.removeAllListeners();
+
+        // Réinitialiser la liste des handlers
         this.handlers = {};
+        console.log("Tous les listeners ont été nettoyés");
       } catch (error) {
-        console.error("Erreur lors de la suppression des listeners:", error);
+        console.error("Erreur lors du nettoyage des listeners:", error);
       }
 
       // Déconnecter le socket
       this.socket.disconnect();
       this.socket = null;
+      this.isConnecting = false;
+      this.currentUserId = null;
+      console.log("Socket déconnecté et réinitialisé");
     }
   }
 

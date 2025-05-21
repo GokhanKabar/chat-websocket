@@ -22,8 +22,12 @@ const ChatPage = () => {
   const [notification, setNotification] = useState(null);
   const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
   const typingTimeoutsRef = useRef({});
+  const isMountedRef = useRef(true); // Track if component is mounted
 
   useEffect(() => {
+    // Mark as mounted
+    isMountedRef.current = true;
+
     // Récupérer le token JWT du localStorage
     const token = localStorage.getItem("token");
     console.log(
@@ -41,6 +45,8 @@ const ChatPage = () => {
 
     // Initialiser la connexion WebSocket avec un délai pour s'assurer que la déconnexion est terminée
     setTimeout(() => {
+      if (!isMountedRef.current) return; // Skip if component unmounted
+
       socketService.connect(token);
 
       // Écouter les événements
@@ -59,6 +65,7 @@ const ChatPage = () => {
 
       // Écouteur pour les erreurs de connexion
       socketService.on("error", (error) => {
+        if (!isMountedRef.current) return; // Prevent state updates after unmount
         console.error("Erreur WebSocket reçue:", error);
         showNotification("error", `Erreur: ${error.message}`);
       });
@@ -70,12 +77,20 @@ const ChatPage = () => {
     // Nettoyage à la déconnexion
     return () => {
       console.log("Nettoyage du composant ChatPage - déconnexion du socket");
+      // Mark as unmounted to prevent state updates after the component is gone
+      isMountedRef.current = false;
+      // Cancel any pending timeouts
+      Object.values(typingTimeoutsRef.current).forEach(clearTimeout);
+      typingTimeoutsRef.current = {};
+      // Disconnect socket
       socketService.disconnect();
     };
   }, [navigate]);
 
   // Gestionnaire des événements WebSocket
   const handleUserConnected = (data) => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
+
     console.log("handleUserConnected:", data);
     console.log("Socket ID:", socketService.socket.id);
     console.log(
@@ -114,10 +129,13 @@ const ChatPage = () => {
   };
 
   const handleUserDisconnected = (data) => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
     setRoomUsers((prev) => prev.filter((user) => user.id !== data.userId));
   };
 
   const handleNewMessage = (data) => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
+
     console.log("Nouveau message reçu:", data);
     // Le serveur peut envoyer soit un message directement, soit un objet {message}
     const messageToAdd = data.message || data;
@@ -130,6 +148,8 @@ const ChatPage = () => {
   };
 
   const handleRoomHistory = (data) => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
+
     console.log("Historique de la salle reçu:", data);
     // Le serveur peut renvoyer directement les messages ou un objet {messages, users}
     const historyMessages = data.messages || data;
@@ -139,6 +159,8 @@ const ChatPage = () => {
   };
 
   const handleUserJoinedRoom = (data) => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
+
     console.log("User joined room event:", data);
 
     // Vérification que data et data.user existent
@@ -171,6 +193,8 @@ const ChatPage = () => {
   };
 
   const handleUserLeftRoom = (data) => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
+
     console.log("User left room event:", data);
 
     // Vérification des données
@@ -195,6 +219,8 @@ const ChatPage = () => {
   };
 
   const handleTyping = (data) => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
+
     console.log("Typing event:", data);
 
     // Vérification des données
@@ -226,6 +252,7 @@ const ChatPage = () => {
 
       // Définir un nouveau timeout pour cet utilisateur
       typingTimeoutsRef.current[userId] = setTimeout(() => {
+        if (!isMountedRef.current) return; // Prevent state update in timeout after unmount
         setTypingUsers((prev) => prev.filter((id) => id !== userId));
         delete typingTimeoutsRef.current[userId];
       }, 3000); // Le statut expire après 3 secondes d'inactivité
@@ -237,6 +264,8 @@ const ChatPage = () => {
 
   // Gestionnaire pour les nouveaux utilisateurs qui rejoignent
   const handleUserJoined = (data) => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
+
     console.log("Nouvel utilisateur connecté:", data);
 
     if (data.user) {
@@ -282,29 +311,31 @@ const ChatPage = () => {
   const handleLogout = () => {
     console.log("Déconnexion de l'utilisateur:", currentUser?.username);
 
-    // Suppression du token d'authentification en premier
+    // Mark component as unmounted immediately to prevent any further state updates
+    isMountedRef.current = false;
+
+    // Supprimer d'abord le token d'authentification
     localStorage.removeItem("token");
     localStorage.removeItem("currentUserId");
     localStorage.removeItem("currentUsername");
 
-    // Afficher une notification avant la redirection
-    // Note: Utiliser un état local au lieu de setNotification pour éviter une mise à jour d'état pendant la déconnexion
-    const logoutMessage = "Vous avez été déconnecté";
-
-    // Déconnexion du WebSocket
+    // Déconnecter le WebSocket APRÈS avoir supprimé les données
     socketService.disconnect();
 
-    // Rediriger immédiatement sans mettre à jour l'état
-    navigate("/login", {
-      state: { justLoggedOut: true, message: logoutMessage },
-    });
+    // Rediriger directement sans notification
+    // La notification peut causer une mise à jour d'état pendant la navigation,
+    // ce qui peut produire "Maximum update depth exceeded"
+    navigate("/login", { state: { justLoggedOut: true } });
   };
 
   const showNotification = (type, message) => {
+    if (!isMountedRef.current) return; // Prevent notification after unmount
+
     setNotification({ type, message });
 
     // Effacer la notification après 3 secondes
     setTimeout(() => {
+      if (!isMountedRef.current) return; // Prevent state update in timeout after unmount
       setNotification(null);
     }, 3000);
   };
@@ -317,46 +348,16 @@ const ChatPage = () => {
         clearTimeout(timeout);
       });
       typingTimeoutsRef.current = {};
+
+      // Mark as unmounted
+      isMountedRef.current = false;
     };
   }, []);
 
-  // Fonction pour ouvrir la modale de sélection de couleur
-  const openColorPicker = () => {
-    setIsColorPickerOpen(true);
-  };
-
-  // Fonction pour fermer la modale de sélection de couleur
-  const closeColorPicker = () => {
-    setIsColorPickerOpen(false);
-  };
-
-  // Fonction pour sauvegarder la nouvelle couleur
-  const handleSaveColor = async (newColor) => {
-    try {
-      if (!currentUser || !currentUser.id) {
-        showNotification("error", "Utilisateur non identifié");
-        return;
-      }
-
-      // Afficher une notification de chargement
-      showNotification("info", "Mise à jour de votre couleur...");
-
-      // Appel API pour mettre à jour la couleur
-      const updatedUser = await updateUserColor(currentUser.id, newColor);
-
-      // Note: Les mises à jour visuelles seront faites via l'événement WebSocket
-      // pour garantir la cohérence entre tous les clients
-
-      // Notification de succès plus claire
-      showNotification("success", "Votre couleur a été mise à jour");
-    } catch (error) {
-      console.error("Erreur lors de la mise à jour de la couleur:", error);
-      showNotification("error", "Erreur lors de la mise à jour de la couleur");
-    }
-  };
-
   // Gestionnaire pour les mises à jour de couleur des utilisateurs
   const handleUserColorChanged = (data) => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
+
     console.log("Mise à jour de couleur reçue:", data);
 
     // Mettre à jour la couleur de l'utilisateur dans la liste des utilisateurs
@@ -408,6 +409,8 @@ const ChatPage = () => {
 
   // Gestionnaire pour les nouveaux salons créés par d'autres utilisateurs
   const handleRoomCreated = (data) => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
+
     console.log("Nouveau salon créé:", data);
     // Ne pas ajouter le salon s'il existe déjà
     setRooms((prev) => {
@@ -421,6 +424,8 @@ const ChatPage = () => {
 
   // Gestionnaire pour la liste initiale des salons
   const handleRoomList = (data) => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
+
     console.log("Liste des salons reçue:", data);
     if (data.rooms && Array.isArray(data.rooms)) {
       // Filtrer le salon "general" et enlever les doublons par ID
@@ -450,6 +455,8 @@ const ChatPage = () => {
 
   // Gestionnaire pour les mises à jour de la liste des utilisateurs d'une salle
   const handleRoomUserList = (data) => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
+
     console.log("Liste d'utilisateurs mise à jour reçue:", data);
 
     // Vérifier si c'est pour la salle actuelle
@@ -462,8 +469,49 @@ const ChatPage = () => {
     }
   };
 
+  // Fonction pour ouvrir la modale de sélection de couleur
+  const openColorPicker = () => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
+    setIsColorPickerOpen(true);
+  };
+
+  // Fonction pour fermer la modale de sélection de couleur
+  const closeColorPicker = () => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
+    setIsColorPickerOpen(false);
+  };
+
+  // Fonction pour sauvegarder la nouvelle couleur
+  const handleSaveColor = async (newColor) => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
+
+    try {
+      if (!currentUser || !currentUser.id) {
+        showNotification("error", "Utilisateur non identifié");
+        return;
+      }
+
+      // Afficher une notification de chargement
+      showNotification("info", "Mise à jour de votre couleur...");
+
+      // Appel API pour mettre à jour la couleur
+      const updatedUser = await updateUserColor(currentUser.id, newColor);
+
+      // Note: Les mises à jour visuelles seront faites via l'événement WebSocket
+      // pour garantir la cohérence entre tous les clients
+
+      // Notification de succès plus claire
+      showNotification("success", "Votre couleur a été mise à jour");
+    } catch (error) {
+      console.error("Erreur lors de la mise à jour de la couleur:", error);
+      showNotification("error", "Erreur lors de la mise à jour de la couleur");
+    }
+  };
+
   // Fonction pour créer un salon privé avec un autre utilisateur
   const handlePrivateChat = (otherUser) => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
+
     if (!currentUser) {
       showNotification(
         "error",

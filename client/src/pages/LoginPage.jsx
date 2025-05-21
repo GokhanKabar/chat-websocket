@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import socketService from "../services/socketService";
 
@@ -12,6 +12,16 @@ const LoginPage = () => {
   const [error, setError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const isMountedRef = useRef(true);
+
+  // Set mounted flag on initial render
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   // Déconnecter toute session WebSocket existante
   useEffect(() => {
@@ -22,18 +32,14 @@ const LoginPage = () => {
     if (location.state?.justLoggedOut) {
       // Nettoyer le localStorage pour éviter les problèmes de session
       console.log("Déconnexion récente détectée, nettoyage du localStorage");
-      // Le token est déjà supprimé dans handleLogout, mais par sécurité
       localStorage.removeItem("token");
-
-      // Afficher le message de déconnexion s'il existe
-      if (location.state.message) {
-        setSuccessMessage(location.state.message);
-      }
     }
   }, [location.state]);
 
   // Vérifier si l'utilisateur vient de s'inscrire
   useEffect(() => {
+    if (!isMountedRef.current) return;
+
     if (location.state?.message) {
       setSuccessMessage(location.state.message);
 
@@ -53,6 +59,8 @@ const LoginPage = () => {
   }, [location, formData.email]);
 
   const handleChange = (e) => {
+    if (!isMountedRef.current) return;
+
     setFormData({
       ...formData,
       [e.target.name]: e.target.value,
@@ -61,6 +69,8 @@ const LoginPage = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!isMountedRef.current) return;
+
     setError("");
     setSuccessMessage("");
     setIsLoading(true);
@@ -79,6 +89,8 @@ const LoginPage = () => {
         },
         body: JSON.stringify(formData),
       });
+
+      if (!isMountedRef.current) return;
 
       console.log("Statut de la réponse:", response.status);
 
@@ -114,10 +126,14 @@ const LoginPage = () => {
       // Redirection vers le chat
       navigate("/chat");
     } catch (err) {
+      if (!isMountedRef.current) return;
+
       console.error("Erreur complète:", err);
       setError(err.message);
     } finally {
-      setIsLoading(false);
+      if (isMountedRef.current) {
+        setIsLoading(false);
+      }
     }
   };
 
