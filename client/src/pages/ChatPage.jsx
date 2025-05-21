@@ -23,6 +23,7 @@ const ChatPage = () => {
   const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
   const typingTimeoutsRef = useRef({});
   const isMountedRef = useRef(true); // Track if component is mounted
+  const messageIdRef = useRef(new Set()); // Pour suivre les messages déjà affichés
 
   useEffect(() => {
     // Mark as mounted
@@ -36,32 +37,49 @@ const ChatPage = () => {
     );
 
     if (!token) {
-      navigate("/login");
+      // When navigating away immediately, mark as unmounted first
+      isMountedRef.current = false;
+      // Use setTimeout to ensure this happens after the current execution context
+      setTimeout(() => {
+        navigate("/login");
+      }, 0);
       return;
     }
 
     // Forcer la déconnexion d'abord pour éviter les problèmes de connexion multiple
     socketService.disconnect();
 
+    // Réinitialiser l'ensemble des messages déjà affichés
+    messageIdRef.current.clear();
+
+    // Store all listeners to be able to remove them properly on cleanup
+    const eventHandlers = [
+      { event: "userConnected", handler: handleUserConnected },
+      { event: "userJoined", handler: handleUserJoined },
+      { event: "userDisconnected", handler: handleUserDisconnected },
+      { event: "newMessage", handler: handleNewMessage },
+      { event: "roomHistory", handler: handleRoomHistory },
+      { event: "userJoinedRoom", handler: handleUserJoinedRoom },
+      { event: "userLeftRoom", handler: handleUserLeftRoom },
+      { event: "typing", handler: handleTyping },
+      { event: "userColorChanged", handler: handleUserColorChanged },
+      { event: "roomCreated", handler: handleRoomCreated },
+      { event: "roomList", handler: handleRoomList },
+      { event: "roomUserList", handler: handleRoomUserList },
+    ];
+
     // Initialiser la connexion WebSocket avec un délai pour s'assurer que la déconnexion est terminée
-    setTimeout(() => {
+    const connectTimeout = setTimeout(() => {
       if (!isMountedRef.current) return; // Skip if component unmounted
 
+      console.log("[DEBUG] Initialisation de la connexion WebSocket");
       socketService.connect(token);
 
       // Écouter les événements
-      socketService.on("userConnected", handleUserConnected);
-      socketService.on("userJoined", handleUserJoined);
-      socketService.on("userDisconnected", handleUserDisconnected);
-      socketService.on("newMessage", handleNewMessage);
-      socketService.on("roomHistory", handleRoomHistory);
-      socketService.on("userJoinedRoom", handleUserJoinedRoom);
-      socketService.on("userLeftRoom", handleUserLeftRoom);
-      socketService.on("typing", handleTyping);
-      socketService.on("userColorChanged", handleUserColorChanged);
-      socketService.on("roomCreated", handleRoomCreated);
-      socketService.on("roomList", handleRoomList);
-      socketService.on("roomUserList", handleRoomUserList);
+      console.log("[DEBUG] Ajout des écouteurs d'événements");
+      eventHandlers.forEach(({ event, handler }) => {
+        socketService.on(event, handler);
+      });
 
       // Écouteur pour les erreurs de connexion
       socketService.on("error", (error) => {
@@ -71,17 +89,31 @@ const ChatPage = () => {
       });
 
       // Rejoindre la salle général par défaut
+      console.log("[DEBUG] Rejoindre la salle général");
       socketService.joinRoom("general");
     }, 300);
 
     // Nettoyage à la déconnexion
     return () => {
-      console.log("Nettoyage du composant ChatPage - déconnexion du socket");
+      console.log(
+        "[DEBUG] Nettoyage du composant ChatPage - déconnexion du socket"
+      );
+      // Annuler le timeout si la déconnexion arrive avant
+      clearTimeout(connectTimeout);
       // Mark as unmounted to prevent state updates after the component is gone
       isMountedRef.current = false;
       // Cancel any pending timeouts
       Object.values(typingTimeoutsRef.current).forEach(clearTimeout);
       typingTimeoutsRef.current = {};
+      // Vider l'ensemble des messages
+      messageIdRef.current.clear();
+
+      // Remove all event listeners properly
+      eventHandlers.forEach(({ event }) => {
+        socketService.off(event);
+      });
+      socketService.off("error");
+
       // Disconnect socket
       socketService.disconnect();
     };
@@ -136,13 +168,33 @@ const ChatPage = () => {
   const handleNewMessage = (data) => {
     if (!isMountedRef.current) return; // Prevent state update after unmount
 
-    console.log("Nouveau message reçu:", data);
+    console.log("[DEBUG] Nouveau message reçu:", data);
+
+    // Vérifier si le message a déjà été traité
+    const messageId = data.id || (data.message && data.message.id);
+    if (messageId && messageIdRef.current.has(messageId)) {
+      console.log(`[DEBUG] Message déjà affiché, ignoré (ID: ${messageId})`);
+      return;
+    }
+
     // Le serveur peut envoyer soit un message directement, soit un objet {message}
     const messageToAdd = data.message || data;
 
+    // Ajouter l'ID du message à notre ensemble pour éviter les doublons
+    if (messageId) {
+      messageIdRef.current.add(messageId);
+      // Limiter la taille du Set pour éviter les fuites de mémoire
+      if (messageIdRef.current.size > 200) {
+        // Garder seulement les 100 derniers IDs
+        messageIdRef.current = new Set(
+          Array.from(messageIdRef.current).slice(-100)
+        );
+      }
+    }
+
     // Ajouter des informations de débogage
-    console.log("Message ajouté:", messageToAdd);
-    console.log("Utilisateur actuel:", currentUser);
+    console.log("[DEBUG] Message ajouté:", messageToAdd);
+    console.log("[DEBUG] Utilisateur actuel:", currentUser);
 
     setMessages((prev) => [...prev, messageToAdd]);
   };
@@ -301,6 +353,9 @@ const ChatPage = () => {
   };
 
   const handleSendMessage = (content) => {
+    console.log(
+      `[DEBUG] Envoi de message dans la salle ${currentRoom}: "${content}"`
+    );
     socketService.sendMessage(currentRoom, content);
   };
 
@@ -314,18 +369,39 @@ const ChatPage = () => {
     // Mark component as unmounted immediately to prevent any further state updates
     isMountedRef.current = false;
 
-    // Supprimer d'abord le token d'authentification
+    // Remove socket event listeners first to prevent any callbacks during logout
+    const events = [
+      "userConnected",
+      "userJoined",
+      "userDisconnected",
+      "newMessage",
+      "roomHistory",
+      "userJoinedRoom",
+      "userLeftRoom",
+      "typing",
+      "userColorChanged",
+      "roomCreated",
+      "roomList",
+      "roomUserList",
+      "error",
+    ];
+
+    events.forEach((event) => {
+      socketService.off(event);
+    });
+
+    // Disconnect socket
+    socketService.disconnect();
+
+    // Clear local storage after socket disconnection
     localStorage.removeItem("token");
     localStorage.removeItem("currentUserId");
     localStorage.removeItem("currentUsername");
 
-    // Déconnecter le WebSocket APRÈS avoir supprimé les données
-    socketService.disconnect();
-
-    // Rediriger directement sans notification
-    // La notification peut causer une mise à jour d'état pendant la navigation,
-    // ce qui peut produire "Maximum update depth exceeded"
-    navigate("/login", { state: { justLoggedOut: true } });
+    // Use a slight delay before navigation to ensure all async operations complete
+    setTimeout(() => {
+      navigate("/login", { state: { justLoggedOut: true } });
+    }, 50);
   };
 
   const showNotification = (type, message) => {
@@ -352,23 +428,43 @@ const ChatPage = () => {
       // Mark as unmounted
       isMountedRef.current = false;
     };
-  }, []);
+  }, []); // Empty dependency array is correct here as we only want this to run on mount/unmount
 
   // Gestionnaire pour les mises à jour de couleur des utilisateurs
   const handleUserColorChanged = (data) => {
     if (!isMountedRef.current) return; // Prevent state update after unmount
 
-    console.log("Mise à jour de couleur reçue:", data);
+    console.log("[COLOR] Mise à jour de couleur reçue:", data);
 
     // Mettre à jour la couleur de l'utilisateur dans la liste des utilisateurs
-    setRoomUsers((prev) =>
-      prev.map((user) =>
+    setRoomUsers((prev) => {
+      const updatedUsers = prev.map((user) =>
         user.id === data.userId ? { ...user, color: data.color } : user
-      )
-    );
+      );
 
-    // Si c'est l'utilisateur actuel, mettre également à jour son état
+      // Log le avant/après pour diagnostiquer
+      const userBefore = prev.find((u) => u.id === data.userId);
+      const userAfter = updatedUsers.find((u) => u.id === data.userId);
+
+      if (userBefore && userAfter) {
+        console.log(`[COLOR] Mise à jour utilisateur ${userAfter.username}:`, {
+          ancienneCouleur: userBefore.color,
+          nouvelleCouleur: userAfter.color,
+        });
+      } else if (!userBefore) {
+        console.log(
+          `[COLOR] Utilisateur ID=${data.userId} non trouvé dans la liste actuelle des utilisateurs`
+        );
+      }
+
+      return updatedUsers;
+    });
+
+    // Si c'est l'utilisateur actuellement connecté, mettre à jour son état
     if (currentUser && currentUser.id === data.userId) {
+      console.log(`[COLOR] Mise à jour de ma propre couleur: ${data.color}`);
+
+      // Mettre à jour l'état local
       setCurrentUser((prev) => ({
         ...prev,
         color: data.color,
@@ -376,20 +472,60 @@ const ChatPage = () => {
 
       // Sauvegarder la nouvelle couleur dans le localStorage pour persistance
       try {
+        // Essayer d'abord userData
         const userDataString = localStorage.getItem("userData");
         if (userDataString) {
           const userData = JSON.parse(userDataString);
           userData.color = data.color;
           localStorage.setItem("userData", JSON.stringify(userData));
+          console.log(
+            `[COLOR] Couleur mise à jour dans userData: ${data.color}`
+          );
         }
+
+        // Mise à jour directe si userData n'existe pas
+        localStorage.setItem("userColor", data.color);
+        console.log(`[COLOR] Couleur mise à jour directement: ${data.color}`);
       } catch (error) {
-        console.error("Erreur lors de la mise à jour du localStorage:", error);
+        console.error(
+          "[COLOR] Erreur lors de la mise à jour du localStorage:",
+          error
+        );
       }
     }
 
+    // Force UI refresh pour la pastille de couleur dans le header
+    // Cette fois, on utilise l'ID unique au lieu de la classe
+    setTimeout(() => {
+      const headerColorDot = document.getElementById("header-color-dot");
+      if (headerColorDot) {
+        const headerUserId = headerColorDot.getAttribute("data-user-id");
+        if (headerUserId && parseInt(headerUserId) === data.userId) {
+          console.log(
+            `[COLOR] Force mise à jour de la pastille de couleur dans le header: ${data.color}`
+          );
+          headerColorDot.style.backgroundColor = data.color;
+        }
+      }
+
+      // Aussi mettre à jour currentUser si les données sont incompatibles
+      if (currentUser && currentUser.id !== data.userId) {
+        const headerUsername = document.getElementById("header-username");
+        if (headerUsername && headerUsername.textContent === data.username) {
+          console.log(
+            `[COLOR] Détection d'incohérence - mise à jour forcée de currentUser`
+          );
+          setCurrentUser((prev) => ({
+            ...prev,
+            color: data.color,
+          }));
+        }
+      }
+    }, 50);
+
     // Mettre à jour la couleur dans les messages existants
-    setMessages((prev) =>
-      prev.map((msg) => {
+    setMessages((prev) => {
+      const updatedMessages = prev.map((msg) => {
         if (msg.userId === data.userId || msg.user?.id === data.userId) {
           // Créer une copie du message avec la couleur mise à jour
           const updatedMsg = { ...msg };
@@ -403,8 +539,20 @@ const ChatPage = () => {
           return updatedMsg;
         }
         return msg;
-      })
-    );
+      });
+
+      const changedCount = updatedMessages.filter(
+        (msg, idx) =>
+          msg !== prev[idx] &&
+          (msg.userId === data.userId || msg.user?.id === data.userId)
+      ).length;
+
+      console.log(
+        `[COLOR] ${changedCount} messages mis à jour avec la nouvelle couleur`
+      );
+
+      return updatedMessages;
+    });
   };
 
   // Gestionnaire pour les nouveaux salons créés par d'autres utilisateurs
@@ -457,14 +605,67 @@ const ChatPage = () => {
   const handleRoomUserList = (data) => {
     if (!isMountedRef.current) return; // Prevent state update after unmount
 
-    console.log("Liste d'utilisateurs mise à jour reçue:", data);
+    console.log("[USERS] Liste d'utilisateurs mise à jour reçue:", data);
 
     // Vérifier si c'est pour la salle actuelle
     if (data.roomId === currentRoom && data.users) {
-      // Mettre à jour la liste des utilisateurs de la salle
-      setRoomUsers(data.users);
+      // Comparaison avant/après pour détecter les changements
+      setRoomUsers((prev) => {
+        // Comparer les utilisateurs pour voir ce qui a changé
+        const addedUsers = data.users.filter(
+          (newUser) => !prev.some((oldUser) => oldUser.id === newUser.id)
+        );
+
+        const removedUsers = prev.filter(
+          (oldUser) => !data.users.some((newUser) => newUser.id === oldUser.id)
+        );
+
+        const changedUsers = data.users.filter((newUser) => {
+          const oldUser = prev.find((u) => u.id === newUser.id);
+          return (
+            oldUser &&
+            (oldUser.color !== newUser.color ||
+              oldUser.username !== newUser.username)
+          );
+        });
+
+        // Logs de débogage
+        if (addedUsers.length > 0) {
+          console.log(
+            `[USERS] ${addedUsers.length} utilisateurs ajoutés:`,
+            addedUsers
+          );
+        }
+        if (removedUsers.length > 0) {
+          console.log(
+            `[USERS] ${removedUsers.length} utilisateurs retirés:`,
+            removedUsers
+          );
+        }
+        if (changedUsers.length > 0) {
+          console.log(
+            `[USERS] ${changedUsers.length} utilisateurs modifiés:`,
+            changedUsers.map((newUser) => {
+              const oldUser = prev.find((u) => u.id === newUser.id);
+              return {
+                id: newUser.id,
+                username: newUser.username,
+                ancienneCouleur: oldUser?.color,
+                nouvelleCouleur: newUser.color,
+              };
+            })
+          );
+        }
+
+        console.log(
+          `[USERS] Liste des utilisateurs mise à jour pour ${currentRoom}: ${data.users.length} utilisateurs`
+        );
+
+        return data.users;
+      });
+    } else {
       console.log(
-        `Liste des utilisateurs mise à jour pour ${currentRoom}: ${data.users.length} utilisateurs`
+        `[USERS] Liste ignorée car salle différente (actuelle: ${currentRoom}, reçue: ${data.roomId})`
       );
     }
   };
@@ -557,10 +758,18 @@ const ChatPage = () => {
             {currentUser && (
               <div className="flex items-center mr-2">
                 <span
-                  className="w-3 h-3 rounded-full mr-1"
+                  id="header-color-dot"
+                  className="w-3 h-3 rounded-full mr-1 header-color-dot"
                   style={{ backgroundColor: currentUser.color || "#000" }}
+                  data-user-id={currentUser.id}
                 ></span>
-                <span className="text-gray-700">{currentUser.username}</span>
+                <span
+                  id="header-username"
+                  className="text-gray-700 header-username"
+                  data-user-id={currentUser.id}
+                >
+                  {currentUser.username}
+                </span>
                 <button
                   onClick={openColorPicker}
                   className="ml-2 text-gray-500 hover:text-gray-700 focus:outline-none"

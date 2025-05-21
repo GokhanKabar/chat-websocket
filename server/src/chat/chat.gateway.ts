@@ -388,22 +388,55 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() createMessageDto: CreateMessageDto,
     @ConnectedSocket() client: Socket,
   ) {
-    const user = this.connectedUsers.get(client.id);
-    if (!user) return;
-
-    const message = await this.chatService.createMessage(
-      user.id,
+    // Log complet de la demande de message
+    console.log(
+      `[CHAT] Message reçu de client ${client.id}:`,
       createMessageDto,
     );
 
-    this.server.to(createMessageDto.roomId).emit('newMessage', {
-      ...message,
-      user: {
-        id: user.id,
-        username: user.username,
-        color: user.color,
-      },
-    });
+    const user = this.connectedUsers.get(client.id);
+    if (!user) {
+      console.log(
+        `[CHAT] Utilisateur non trouvé pour le socket ${client.id}, message ignoré`,
+      );
+      return;
+    }
+
+    try {
+      // Créer le message dans la base de données
+      console.log(
+        `[CHAT] Création du message de ${user.username} dans la salle ${createMessageDto.roomId}`,
+      );
+      const message = await this.chatService.createMessage(
+        user.id,
+        createMessageDto,
+      );
+
+      // Enrichir le message avec les informations utilisateur
+      const enrichedMessage = {
+        ...message,
+        user: {
+          id: user.id,
+          username: user.username,
+          color: user.color,
+        },
+      };
+
+      console.log(
+        `[CHAT] Diffusion du message (ID: ${message.id}) dans la salle ${createMessageDto.roomId}`,
+      );
+
+      // Émettre le message vers tous les clients dans la salle
+      this.server
+        .to(createMessageDto.roomId)
+        .emit('newMessage', enrichedMessage);
+    } catch (error) {
+      console.error(
+        `[CHAT] Erreur lors de la création/diffusion du message:`,
+        error,
+      );
+      client.emit('error', { message: "Échec de l'envoi du message" });
+    }
   }
 
   @SubscribeMessage('typing')
@@ -621,7 +654,24 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     color: string;
   }) {
     console.log(
-      `Diffusion du changement de couleur pour ${payload.username} (${payload.userId}): ${payload.color}`,
+      `[COLOR] Diffusion du changement de couleur pour ${payload.username} (${payload.userId}): ${payload.color}`,
+    );
+
+    // Mettre à jour la couleur dans notre map d'utilisateurs connectés
+    let userSockets: string[] = [];
+    this.connectedUsers.forEach((userData, socketId) => {
+      if (userData.id === payload.userId) {
+        // Mettre à jour la couleur de l'utilisateur dans notre liste
+        console.log(
+          `[COLOR] Mise à jour de la couleur pour le socket ${socketId}`,
+        );
+        userData.color = payload.color;
+        userSockets.push(socketId);
+      }
+    });
+
+    console.log(
+      `[COLOR] ${userSockets.length} sockets trouvés pour l'utilisateur`,
     );
 
     // Diffuser à tous les clients connectés
@@ -629,6 +679,53 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       userId: payload.userId,
       username: payload.username,
       color: payload.color,
+    });
+
+    // Pour chaque socket d'utilisateur, récupérer ses salles et mettre à jour les listes d'utilisateurs
+    userSockets.forEach((socketId) => {
+      const userData = this.connectedUsers.get(socketId);
+      if (userData && userData.rooms) {
+        console.log(
+          `[COLOR] Mise à jour des listes d'utilisateurs pour ${userData.rooms.length} salles`,
+        );
+
+        // Pour chaque salle où l'utilisateur est présent
+        userData.rooms.forEach(async (roomId) => {
+          try {
+            // Récupérer tous les sockets dans cette salle
+            const sockets = await this.server.in(roomId).fetchSockets();
+            const roomUsers: { id: number; username: string; color: string }[] =
+              [];
+
+            // Collecter les utilisateurs dans cette salle avec leurs informations à jour
+            for (const socket of sockets) {
+              const roomUser = this.connectedUsers.get(socket.id);
+              if (roomUser && !roomUsers.some((u) => u.id === roomUser.id)) {
+                roomUsers.push({
+                  id: roomUser.id,
+                  username: roomUser.username,
+                  color: roomUser.color, // Cette valeur est maintenant à jour
+                });
+              }
+            }
+
+            console.log(
+              `[COLOR] Envoi de la liste mise à jour pour la salle ${roomId}: ${roomUsers.length} utilisateurs`,
+            );
+
+            // Envoyer la liste mise à jour à tous les utilisateurs de cette salle
+            this.server.to(roomId).emit('roomUserList', {
+              users: roomUsers,
+              roomId: roomId,
+            });
+          } catch (error) {
+            console.error(
+              `[COLOR] Erreur lors de la mise à jour de la salle ${roomId}:`,
+              error,
+            );
+          }
+        });
+      }
     });
   }
 }
