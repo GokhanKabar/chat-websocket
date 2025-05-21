@@ -104,6 +104,19 @@ class SocketService {
   // Se déconnecter
   disconnect() {
     if (this.socket) {
+      console.log("Déconnexion du socket");
+
+      // Supprimer d'abord tous les listeners pour éviter les effets de bord
+      try {
+        Object.keys(this.handlers).forEach((event) => {
+          this.socket.off(event, this.handlers[event]);
+        });
+        this.handlers = {};
+      } catch (error) {
+        console.error("Erreur lors de la suppression des listeners:", error);
+      }
+
+      // Déconnecter le socket
       this.socket.disconnect();
       this.socket = null;
     }

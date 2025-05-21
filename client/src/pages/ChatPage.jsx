@@ -282,17 +282,22 @@ const ChatPage = () => {
   const handleLogout = () => {
     console.log("Déconnexion de l'utilisateur:", currentUser?.username);
 
+    // Suppression du token d'authentification en premier
+    localStorage.removeItem("token");
+    localStorage.removeItem("currentUserId");
+    localStorage.removeItem("currentUsername");
+
+    // Afficher une notification avant la redirection
+    // Note: Utiliser un état local au lieu de setNotification pour éviter une mise à jour d'état pendant la déconnexion
+    const logoutMessage = "Vous avez été déconnecté";
+
     // Déconnexion du WebSocket
     socketService.disconnect();
 
-    // Suppression du token d'authentification
-    localStorage.removeItem("token");
-
-    // Afficher une notification avant la redirection
-    showNotification("info", "Vous avez été déconnecté");
-
-    // Utiliser useNavigate avec state pour indiquer qu'on vient de se déconnecter
-    navigate("/login", { state: { justLoggedOut: true } });
+    // Rediriger immédiatement sans mettre à jour l'état
+    navigate("/login", {
+      state: { justLoggedOut: true, message: logoutMessage },
+    });
   };
 
   const showNotification = (type, message) => {

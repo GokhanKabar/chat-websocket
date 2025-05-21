@@ -22,7 +22,13 @@ const LoginPage = () => {
     if (location.state?.justLoggedOut) {
       // Nettoyer le localStorage pour éviter les problèmes de session
       console.log("Déconnexion récente détectée, nettoyage du localStorage");
+      // Le token est déjà supprimé dans handleLogout, mais par sécurité
       localStorage.removeItem("token");
+
+      // Afficher le message de déconnexion s'il existe
+      if (location.state.message) {
+        setSuccessMessage(location.state.message);
+      }
     }
   }, [location.state]);
 
