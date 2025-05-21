@@ -26,14 +26,23 @@ const LoginPage = () => {
   // Déconnecter toute session WebSocket existante
   useEffect(() => {
     console.log("LoginPage - Déconnexion de toute session WebSocket existante");
-    socketService.disconnect();
-
+    
     // Vérifier si l'on vient de se déconnecter
     if (location.state?.justLoggedOut) {
       // Nettoyer le localStorage pour éviter les problèmes de session
       console.log("Déconnexion récente détectée, nettoyage du localStorage");
       localStorage.removeItem("token");
+      
+      // Nettoyer l'état de navigation pour éviter les boucles
+      window.history.replaceState({}, document.title);
     }
+    
+    // Déconnecter le socket de manière asynchrone
+    const timer = setTimeout(() => {
+      socketService.disconnect();
+    }, 0);
+    
+    return () => clearTimeout(timer);
   }, [location.state]);
 
   // Vérifier si l'utilisateur vient de s'inscrire
