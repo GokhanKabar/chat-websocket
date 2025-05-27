@@ -28,7 +28,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   private connectedUsers: Map<
     string,
-    { id: number; username: string; color: string; rooms: string[] }
+    {
+      id: number;
+      username: string;
+      color: string;
+      avatar?: string;
+      rooms: string[];
+    }
   > = new Map();
 
   constructor(
@@ -100,7 +106,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       console.log('Token payload:', JSON.stringify(payload, null, 2));
 
-      const user = await this.usersService.findUserById(payload.sub);
+      const user = (await this.usersService.findUserById(payload.sub)) as any;
       if (!user) {
         console.error('User not found for ID:', payload.sub);
         client.emit('error', { message: 'User not found' });
@@ -153,6 +159,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         id: user.id,
         username: user.username,
         color: user.color,
+        avatar: user.avatar || undefined,
         rooms: ['general'],
       });
 
@@ -166,6 +173,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           id: user.id,
           username: user.username,
           color: user.color,
+          avatar: user.avatar || undefined,
         },
         isCurrentUser: true,
       });
@@ -199,6 +207,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           id: user.id,
           username: user.username,
           color: user.color,
+          avatar: user.avatar || undefined,
         },
       });
 
@@ -208,6 +217,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           id: user.id,
           username: user.username,
           color: user.color,
+          avatar: user.avatar || undefined,
         },
         roomId: 'general',
       });
@@ -269,23 +279,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Obtenir la liste mise à jour des utilisateurs dans cette salle
       try {
-        const sockets = await this.server.in(roomId).fetchSockets();
-        const roomUsers: { id: number; username: string; color: string }[] = [];
+        // D'abord faire quitter l'utilisateur de la salle
+        client.leave(roomId);
 
-        // Collecter les utilisateurs restants
-        for (const socket of sockets) {
-          if (socket.id !== client.id) {
-            // Exclure l'utilisateur qui se déconnecte
-            const roomUser = this.connectedUsers.get(socket.id);
-            if (roomUser && !roomUsers.some((u) => u.id === roomUser.id)) {
-              roomUsers.push({
-                id: roomUser.id,
-                username: roomUser.username,
-                color: roomUser.color,
-              });
-            }
-          }
-        }
+        // Ensuite récupérer la liste mise à jour des utilisateurs
+        const roomUsers = await this.getRoomUsersWithCurrentInfo(roomId);
 
         console.log(
           `Après déconnexion de ${user.username}, salon ${roomId} a ${roomUsers.length} utilisateurs`,
@@ -329,32 +327,19 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         id: user.id,
         username: user.username,
         color: user.color,
+        avatar: user.avatar,
       },
       roomId: data.roomId,
     });
 
     // Récupérer l'historique des messages
-    const messages = await this.roomService.getRoomMessages(data.roomId);
+    const rawMessages = await this.roomService.getRoomMessages(data.roomId);
 
-    // Obtenir la liste des utilisateurs connectés dans cette salle
-    const roomUsers: { id: number; username: string; color: string }[] = [];
-    const sockets = await this.server.in(data.roomId).fetchSockets();
+    // Enrichir les messages avec les informations utilisateur actuelles (avatars mis à jour)
+    const messages = await this.enrichMessagesWithCurrentUserInfo(rawMessages);
 
-    for (const socket of sockets) {
-      const roomUser = this.connectedUsers.get(socket.id);
-      if (roomUser) {
-        // Ne pas ajouter de duplicata dans la liste des utilisateurs
-        if (
-          !roomUsers.some((existingUser) => existingUser.id === roomUser.id)
-        ) {
-          roomUsers.push({
-            id: roomUser.id,
-            username: roomUser.username,
-            color: roomUser.color,
-          });
-        }
-      }
-    }
+    // Utiliser notre méthode améliorée pour obtenir les utilisateurs avec avatars actuels
+    const roomUsers = await this.getRoomUsersWithCurrentInfo(data.roomId);
 
     console.log(`Room ${data.roomId} has ${roomUsers.length} users:`);
     roomUsers.forEach((u) => console.log(`- ${u.username} (${u.id})`));
@@ -376,11 +361,20 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
 
     // Diffuser la liste mise à jour des utilisateurs à tous les membres de la salle
-    // Cela garantit que tout le monde voit la même liste
+    // Cela garantit que tout le monde voit la même liste avec les avatars actuels
     this.server.to(data.roomId).emit('roomUserList', {
       users: roomUsers,
       roomId: data.roomId,
     });
+
+    console.log(
+      `[DEBUG] Envoi de roomUserList pour ${data.roomId}:`,
+      roomUsers.map((u) => ({
+        id: u.id,
+        username: u.username,
+        hasAvatar: !!u.avatar,
+      })),
+    );
   }
 
   @SubscribeMessage('sendMessage')
@@ -419,6 +413,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           id: user.id,
           username: user.username,
           color: user.color,
+          avatar: user.avatar,
         },
       };
 
@@ -455,6 +450,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           id: user.id,
           username: user.username,
           color: user.color,
+          avatar: user.avatar,
         },
       });
     }
@@ -493,20 +489,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Récupérer la liste mise à jour des utilisateurs dans cette salle
       try {
-        const sockets = await this.server.in(data.roomId).fetchSockets();
-        const roomUsers: { id: number; username: string; color: string }[] = [];
-
-        // Collecter les utilisateurs restants
-        for (const socket of sockets) {
-          const roomUser = this.connectedUsers.get(socket.id);
-          if (roomUser && !roomUsers.some((u) => u.id === roomUser.id)) {
-            roomUsers.push({
-              id: roomUser.id,
-              username: roomUser.username,
-              color: roomUser.color,
-            });
-          }
-        }
+        const roomUsers = await this.getRoomUsersWithCurrentInfo(data.roomId);
 
         console.log(
           `Après le départ de ${user.username}, salon ${data.roomId} a ${roomUsers.length} utilisateurs`,
@@ -608,6 +591,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
             id: user.id,
             username: user.username,
             color: user.color,
+            avatar: user.avatar,
           },
           roomId: data.roomId,
         });
@@ -619,20 +603,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // Récupérer l'historique des messages pour ce salon
       const messages = await this.roomService.getRoomMessages(data.roomId);
 
-      // Obtenir la liste des utilisateurs connectés dans cette salle
-      const roomUsers: { id: number; username: string; color: string }[] = [];
-      const sockets = await this.server.in(data.roomId).fetchSockets();
-
-      for (const socket of sockets) {
-        const roomUser = this.connectedUsers.get(socket.id);
-        if (roomUser) {
-          roomUsers.push({
-            id: roomUser.id,
-            username: roomUser.username,
-            color: roomUser.color,
-          });
-        }
-      }
+      // Obtenir la liste des utilisateurs connectés dans cette salle avec avatars actuels
+      const roomUsers = await this.getRoomUsersWithCurrentInfo(data.roomId);
 
       // Envoyer l'historique des messages et la liste des utilisateurs au créateur
       client.emit('roomHistory', {
@@ -692,22 +664,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         // Pour chaque salle où l'utilisateur est présent
         userData.rooms.forEach(async (roomId) => {
           try {
-            // Récupérer tous les sockets dans cette salle
-            const sockets = await this.server.in(roomId).fetchSockets();
-            const roomUsers: { id: number; username: string; color: string }[] =
-              [];
-
-            // Collecter les utilisateurs dans cette salle avec leurs informations à jour
-            for (const socket of sockets) {
-              const roomUser = this.connectedUsers.get(socket.id);
-              if (roomUser && !roomUsers.some((u) => u.id === roomUser.id)) {
-                roomUsers.push({
-                  id: roomUser.id,
-                  username: roomUser.username,
-                  color: roomUser.color, // Cette valeur est maintenant à jour
-                });
-              }
-            }
+            // Utiliser notre méthode améliorée pour obtenir les utilisateurs avec leurs informations à jour
+            const roomUsers = await this.getRoomUsersWithCurrentInfo(roomId);
 
             console.log(
               `[COLOR] Envoi de la liste mise à jour pour la salle ${roomId}: ${roomUsers.length} utilisateurs`,
@@ -727,5 +685,202 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         });
       }
     });
+  }
+
+  // Écouteur d'événements pour les changements d'avatar
+  @OnEvent('user.avatarChanged')
+  async handleUserAvatarChanged(payload: {
+    userId: number;
+    username: string;
+    avatar: string;
+  }) {
+    console.log(
+      `[AVATAR] Diffusion du changement d'avatar pour ${payload.username} (${payload.userId})`,
+    );
+
+    // Mettre à jour l'avatar dans notre map d'utilisateurs connectés
+    let userSockets: string[] = [];
+    this.connectedUsers.forEach((userData, socketId) => {
+      if (userData.id === payload.userId) {
+        // Mettre à jour l'avatar de l'utilisateur dans notre liste
+        console.log(
+          `[AVATAR] Mise à jour de l'avatar pour le socket ${socketId}`,
+        );
+        userData.avatar = payload.avatar;
+        userSockets.push(socketId);
+      }
+    });
+
+    console.log(
+      `[AVATAR] ${userSockets.length} sockets trouvés pour l'utilisateur`,
+    );
+
+    // Diffuser à tous les clients connectés
+    this.server.emit('userAvatarChanged', {
+      userId: payload.userId,
+      username: payload.username,
+      avatar: payload.avatar,
+    });
+
+    // Récupérer toutes les salles où l'utilisateur est présent
+    const userRooms = new Set<string>();
+
+    // Collecter les salles depuis les utilisateurs connectés
+    userSockets.forEach((socketId) => {
+      const userData = this.connectedUsers.get(socketId);
+      if (userData && userData.rooms) {
+        userData.rooms.forEach((roomId) => userRooms.add(roomId));
+      }
+    });
+
+    // Ajouter les salles privées potentielles (pour les utilisateurs non connectés)
+    const allRooms = await this.server.sockets.adapter.rooms;
+    for (const [roomId] of allRooms) {
+      if (roomId.startsWith('private_')) {
+        const participantIds = roomId
+          .replace('private_', '')
+          .split('_')
+          .map(Number);
+        if (participantIds.includes(payload.userId)) {
+          userRooms.add(roomId);
+        }
+      }
+    }
+
+    // Mettre à jour les listes d'utilisateurs pour toutes les salles concernées
+    for (const roomId of userRooms) {
+      try {
+        console.log(`[AVATAR] Mise à jour de la liste pour la salle ${roomId}`);
+
+        // Utiliser notre nouvelle méthode pour obtenir des informations à jour
+        const roomUsers = await this.getRoomUsersWithCurrentInfo(roomId);
+
+        console.log(
+          `[AVATAR] Envoi de la liste mise à jour pour la salle ${roomId}: ${roomUsers.length} utilisateurs`,
+        );
+
+        // Envoyer la liste mise à jour à tous les utilisateurs de cette salle
+        this.server.to(roomId).emit('roomUserList', {
+          users: roomUsers,
+          roomId: roomId,
+        });
+      } catch (error) {
+        console.error(
+          `[AVATAR] Erreur lors de la mise à jour de la salle ${roomId}:`,
+          error,
+        );
+      }
+    }
+  }
+
+  // Méthode pour enrichir les messages avec les informations utilisateur actuelles
+  private async enrichMessagesWithCurrentUserInfo(
+    messages: any[],
+  ): Promise<any[]> {
+    const enrichedMessages: any[] = [];
+
+    for (const message of messages) {
+      try {
+        // Récupérer les informations actuelles de l'utilisateur
+        const currentUserInfo = (await this.usersService.findUserById(
+          message.userId,
+        )) as any;
+
+        if (currentUserInfo) {
+          // Créer le message enrichi avec les informations actuelles
+          const enrichedMessage = {
+            ...message,
+            user: {
+              id: currentUserInfo.id,
+              username: currentUserInfo.username,
+              color: currentUserInfo.color,
+              avatar: currentUserInfo.avatar,
+            },
+            // Préserver les anciennes informations pour compatibilité
+            username: currentUserInfo.username,
+            userColor: currentUserInfo.color,
+            userAvatar: currentUserInfo.avatar,
+          };
+          enrichedMessages.push(enrichedMessage);
+        } else {
+          // Si l'utilisateur n'est pas trouvé, garder le message original
+          enrichedMessages.push(message);
+        }
+      } catch (error) {
+        console.error(
+          `Erreur lors de l'enrichissement du message ${message.id}:`,
+          error,
+        );
+        // En cas d'erreur, garder le message original
+        enrichedMessages.push(message);
+      }
+    }
+
+    return enrichedMessages;
+  }
+
+  // Méthode pour obtenir les utilisateurs d'une salle avec leurs informations complètes
+  private async getRoomUsersWithCurrentInfo(
+    roomId: string,
+  ): Promise<
+    { id: number; username: string; color: string; avatar?: string }[]
+  > {
+    // Récupérer les utilisateurs connectés dans cette salle
+    const sockets = await this.server.in(roomId).fetchSockets();
+    const connectedUserIds = new Set<number>();
+    const roomUsers: {
+      id: number;
+      username: string;
+      color: string;
+      avatar?: string;
+    }[] = [];
+
+    // Collecter les utilisateurs connectés avec leurs informations en temps réel
+    for (const socket of sockets) {
+      const roomUser = this.connectedUsers.get(socket.id);
+      if (roomUser && !connectedUserIds.has(roomUser.id)) {
+        connectedUserIds.add(roomUser.id);
+        roomUsers.push({
+          id: roomUser.id,
+          username: roomUser.username,
+          color: roomUser.color,
+          avatar: roomUser.avatar,
+        });
+      }
+    }
+
+    // Pour les salles privées, s'assurer que tous les participants sont inclus même s'ils ne sont pas connectés
+    if (roomId.startsWith('private_')) {
+      try {
+        const participantIds = roomId
+          .replace('private_', '')
+          .split('_')
+          .map(Number);
+
+        for (const participantId of participantIds) {
+          if (!connectedUserIds.has(participantId)) {
+            // Récupérer les informations de l'utilisateur depuis la base de données
+            const user = (await this.usersService.findUserById(
+              participantId,
+            )) as any;
+            if (user) {
+              roomUsers.push({
+                id: user.id,
+                username: user.username,
+                color: user.color,
+                avatar: user.avatar || undefined,
+              });
+            }
+          }
+        }
+      } catch (error) {
+        console.error(
+          'Erreur lors de la récupération des participants du salon privé:',
+          error,
+        );
+      }
+    }
+
+    return roomUsers;
   }
 }

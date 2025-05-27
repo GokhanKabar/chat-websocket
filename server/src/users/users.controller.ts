@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { UpdateColorDto } from './dto/update-color.dto';
+import { UpdateAvatarDto } from './dto/update-avatar.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 
 @Controller('users')
@@ -35,6 +36,26 @@ export class UsersController {
     return this.usersService.updateUserColor(
       Number(userId),
       updateColorDto.color,
+    );
+  }
+
+  @Put(':id/avatar')
+  @UseGuards(JwtAuthGuard)
+  @UsePipes(new ValidationPipe())
+  async updateUserAvatar(
+    @Param('id') userId: string,
+    @Body() updateAvatarDto: UpdateAvatarDto,
+    @Req() req,
+  ) {
+    // Vérifier que l'utilisateur modifie son propre profil
+    if (Number(userId) !== req.user.id) {
+      throw new UnauthorizedException(
+        'Vous ne pouvez modifier que votre propre avatar',
+      );
+    }
+    return this.usersService.updateUserAvatar(
+      Number(userId),
+      updateAvatarDto.avatar,
     );
   }
 

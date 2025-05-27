@@ -16,6 +16,7 @@ model User {
   username  String     @unique
   password  String
   color     String     @default("#000000")
+  avatar    String?
   createdAt DateTime   @default(now())
   messages  Message[]
   userRooms UserRoom[]

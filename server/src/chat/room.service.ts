@@ -54,10 +54,38 @@ export class RoomService {
   async getRoomMessages(roomId: string, limit = 50) {
     return this.prisma.message.findMany({
       where: { roomId },
-      include: { user: true },
+      include: {
+        user: {
+          select: {
+            id: true,
+            username: true,
+            color: true,
+            avatar: true,
+          },
+        },
+      },
       orderBy: { createdAt: 'desc' },
       take: limit,
     });
+  }
+
+  async getRoomUsers(roomId: string) {
+    // Récupérer tous les utilisateurs qui ont rejoint cette salle
+    const userRooms = await this.prisma.userRoom.findMany({
+      where: { roomId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            username: true,
+            color: true,
+            avatar: true,
+          },
+        },
+      },
+    });
+
+    return userRooms.map((userRoom) => userRoom.user);
   }
 
   async getAllRooms() {

@@ -71,6 +71,28 @@ export class UsersService {
     return updatedUser;
   }
 
+  async updateUserAvatar(userId: number, avatar: string) {
+    const updatedUser = await this.prisma.user.update({
+      where: { id: userId },
+      data: { avatar },
+      select: {
+        id: true,
+        username: true,
+        color: true,
+        avatar: true,
+      },
+    });
+
+    // Émettre un événement pour notifier les autres clients
+    this.eventEmitter.emit('user.avatarChanged', {
+      userId: updatedUser.id,
+      username: updatedUser.username,
+      avatar: updatedUser.avatar,
+    });
+
+    return updatedUser;
+  }
+
   async findUserById(userId: number) {
     return this.prisma.user.findUnique({
       where: { id: userId },
@@ -79,6 +101,7 @@ export class UsersService {
         username: true,
         email: true,
         color: true,
+        avatar: true,
       },
     });
   }

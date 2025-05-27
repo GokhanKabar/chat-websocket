@@ -5,9 +5,9 @@ import MessageList from "../components/MessageList";
 import MessageInput from "../components/MessageInput";
 import UserList from "../components/UserList";
 import Notification from "../components/Notification";
-import ColorPickerModal from "../components/ColorPickerModal";
+import ProfileModal from "../components/ProfileModal";
 import socketService from "../services/socketService";
-import { updateUserColor } from "../services/userService";
+import { updateUserColor, updateUserAvatar } from "../services/userService";
 import { v4 as uuidv4 } from "uuid";
 import { FiSettings } from "react-icons/fi";
 
@@ -20,7 +20,7 @@ const ChatPage = () => {
   const [roomUsers, setRoomUsers] = useState([]);
   const [typingUsers, setTypingUsers] = useState([]);
   const [notification, setNotification] = useState(null);
-  const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const typingTimeoutsRef = useRef({});
   const isMountedRef = useRef(true); // Track if component is mounted
   const messageIdRef = useRef(new Set()); // Pour suivre les messages déjà affichés
@@ -66,6 +66,7 @@ const ChatPage = () => {
       { event: "roomCreated", handler: handleRoomCreated },
       { event: "roomList", handler: handleRoomList },
       { event: "roomUserList", handler: handleRoomUserList },
+      { event: "userAvatarChanged", handler: handleUserAvatarChanged },
     ];
 
     // Initialiser la connexion WebSocket avec un délai pour s'assurer que la déconnexion est terminée
@@ -384,6 +385,7 @@ const ChatPage = () => {
       "roomList",
       "roomUserList",
       "error",
+      "userAvatarChanged",
     ];
 
     events.forEach((event) => {
@@ -670,16 +672,16 @@ const ChatPage = () => {
     }
   };
 
-  // Fonction pour ouvrir la modale de sélection de couleur
-  const openColorPicker = () => {
+  // Fonction pour ouvrir la modale de profil
+  const openProfileModal = () => {
     if (!isMountedRef.current) return; // Prevent state update after unmount
-    setIsColorPickerOpen(true);
+    setIsProfileModalOpen(true);
   };
 
-  // Fonction pour fermer la modale de sélection de couleur
-  const closeColorPicker = () => {
+  // Fonction pour fermer la modale de profil
+  const closeProfileModal = () => {
     if (!isMountedRef.current) return; // Prevent state update after unmount
-    setIsColorPickerOpen(false);
+    setIsProfileModalOpen(false);
   };
 
   // Fonction pour sauvegarder la nouvelle couleur
@@ -708,6 +710,101 @@ const ChatPage = () => {
       showNotification("error", "Erreur lors de la mise à jour de la couleur");
     }
   };
+
+  // Fonction pour sauvegarder le nouvel avatar
+  const handleSaveAvatar = async (avatarDataUrl) => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
+
+    try {
+      if (!currentUser || !currentUser.id) {
+        showNotification("error", "Utilisateur non identifié");
+        return;
+      }
+
+      // Afficher une notification de chargement
+      showNotification("info", "Mise à jour de votre avatar...");
+
+      // Appel API pour mettre à jour l'avatar
+      const updatedUser = await updateUserAvatar(currentUser.id, avatarDataUrl);
+
+      // Mettre à jour l'utilisateur localement
+      setCurrentUser((prev) => ({
+        ...prev,
+        avatar: updatedUser.avatar,
+      }));
+
+      // Mettre à jour l'utilisateur dans la liste des utilisateurs de la salle
+      setRoomUsers((prev) =>
+        prev.map((user) =>
+          user.id === currentUser.id
+            ? { ...user, avatar: updatedUser.avatar }
+            : user
+        )
+      );
+
+      // Notification de succès
+      showNotification("success", "Votre avatar a été mis à jour");
+
+      // Envoyer l'information au serveur pour diffusion à tous les clients
+      socketService.socket.emit("userAvatarChanged", {
+        userId: currentUser.id,
+        avatar: updatedUser.avatar,
+      });
+    } catch (error) {
+      console.error("Erreur lors de la mise à jour de l'avatar:", error);
+      showNotification("error", "Erreur lors de la mise à jour de l'avatar");
+    }
+  };
+
+  // Gestionnaire pour les mises à jour d'avatar des utilisateurs
+  const handleUserAvatarChanged = (data) => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
+
+    console.log("[AVATAR] Mise à jour d'avatar reçue:", data);
+
+    // Mettre à jour l'avatar de l'utilisateur dans la liste des utilisateurs
+    setRoomUsers((prev) => {
+      return prev.map((user) =>
+        user.id === data.userId ? { ...user, avatar: data.avatar } : user
+      );
+    });
+
+    // Si c'est l'utilisateur actuellement connecté, mettre à jour son état
+    if (currentUser && currentUser.id === data.userId) {
+      setCurrentUser((prev) => ({
+        ...prev,
+        avatar: data.avatar,
+      }));
+    }
+
+    // Mettre à jour l'avatar dans les messages existants
+    setMessages((prev) => {
+      return prev.map((msg) => {
+        if (msg.userId === data.userId || msg.user?.id === data.userId) {
+          // Créer une copie du message avec l'avatar mis à jour
+          const updatedMsg = { ...msg };
+
+          if (updatedMsg.user) {
+            updatedMsg.user = { ...updatedMsg.user, avatar: data.avatar };
+          } else {
+            updatedMsg.userAvatar = data.avatar;
+          }
+
+          return updatedMsg;
+        }
+        return msg;
+      });
+    });
+  };
+
+  // Ajout de l'écouteur d'événement pour les changements d'avatar
+  useEffect(() => {
+    socketService.on("userAvatarChanged", handleUserAvatarChanged);
+
+    return () => {
+      socketService.off("userAvatarChanged");
+    };
+  }, []);
 
   // Fonction pour créer un salon privé avec un autre utilisateur
   const handlePrivateChat = (otherUser) => {
@@ -757,23 +854,33 @@ const ChatPage = () => {
           <div className="flex items-center space-x-2">
             {currentUser && (
               <div className="flex items-center mr-2">
-                <span
-                  id="header-color-dot"
-                  className="w-3 h-3 rounded-full mr-1 header-color-dot"
-                  style={{ backgroundColor: currentUser.color || "#000" }}
-                  data-user-id={currentUser.id}
-                ></span>
-                <span
-                  id="header-username"
-                  className="text-gray-700 header-username"
-                  data-user-id={currentUser.id}
-                >
-                  {currentUser.username}
-                </span>
+                <div className="flex items-center mr-2">
+                  {currentUser.avatar ? (
+                    <img
+                      src={currentUser.avatar}
+                      alt="Avatar"
+                      className="w-8 h-8 rounded-full mr-1 object-cover"
+                    />
+                  ) : (
+                    <span
+                      id="header-color-dot"
+                      className="w-3 h-3 rounded-full mr-1 header-color-dot"
+                      style={{ backgroundColor: currentUser.color || "#000" }}
+                      data-user-id={currentUser.id}
+                    ></span>
+                  )}
+                  <span
+                    id="header-username"
+                    className="text-gray-700 header-username"
+                    data-user-id={currentUser.id}
+                  >
+                    {currentUser.username}
+                  </span>
+                </div>
                 <button
-                  onClick={openColorPicker}
+                  onClick={openProfileModal}
                   className="ml-2 text-gray-500 hover:text-gray-700 focus:outline-none"
-                  title="Paramètres de couleur"
+                  title="Paramètres de profil"
                 >
                   <FiSettings size={16} />
                 </button>
@@ -816,12 +923,13 @@ const ChatPage = () => {
         />
       </main>
 
-      {/* Modale de sélection de couleur */}
-      <ColorPickerModal
-        isOpen={isColorPickerOpen}
-        onClose={closeColorPicker}
-        currentColor={currentUser?.color || "#1D4ED8"}
-        onSave={handleSaveColor}
+      {/* Modale de profil */}
+      <ProfileModal
+        isOpen={isProfileModalOpen}
+        onClose={closeProfileModal}
+        currentUser={currentUser}
+        onSaveColor={handleSaveColor}
+        onSaveAvatar={handleSaveAvatar}
       />
 
       <Notification

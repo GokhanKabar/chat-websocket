@@ -40,6 +40,44 @@ export const updateUserColor = async (userId, color) => {
   }
 };
 
+/**
+ * Met à jour l'avatar de l'utilisateur
+ * @param {number} userId - ID de l'utilisateur
+ * @param {string} avatarDataUrl - Image en format Data URL (base64)
+ * @returns {Promise<Object>} - Utilisateur mis à jour
+ */
+export const updateUserAvatar = async (userId, avatarDataUrl) => {
+  try {
+    const token = localStorage.getItem("token");
+
+    if (!token) {
+      throw new Error("Aucun token trouvé, veuillez vous reconnecter");
+    }
+
+    // Convertir Data URL en Blob pour l'envoi
+    const response = await fetch(`${API_URL}/users/${userId}/avatar`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ avatar: avatarDataUrl }),
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `Erreur lors de la mise à jour de l'avatar (${response.status})`
+      );
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Erreur lors de la mise à jour de l'avatar:", error);
+    throw error;
+  }
+};
+
 export default {
   updateUserColor,
+  updateUserAvatar,
 };

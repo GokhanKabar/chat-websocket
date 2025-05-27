@@ -25,6 +25,32 @@ const MessageList = ({ messages, currentUser }) => {
     console.log("Current user:", currentUser);
   }, [messages, currentUser]);
 
+  // Fonction pour afficher l'avatar ou un avatar par défaut
+  const renderAvatar = (user) => {
+    if (user?.avatar) {
+      return (
+        <img
+          src={user.avatar}
+          alt={`Avatar de ${user.username}`}
+          className="w-8 h-8 rounded-full object-cover"
+        />
+      );
+    }
+
+    // Avatar par défaut avec l'initiale de l'utilisateur
+    const initial = (user?.username || "U")[0].toUpperCase();
+    const bgColor = user?.color || "#E5E7EB";
+
+    return (
+      <div
+        className="w-8 h-8 rounded-full flex items-center justify-center text-white font-medium"
+        style={{ backgroundColor: bgColor }}
+      >
+        {initial}
+      </div>
+    );
+  };
+
   // Si pas de messages
   if (!messages || messages.length === 0) {
     return (
@@ -53,6 +79,15 @@ const MessageList = ({ messages, currentUser }) => {
             message.username || message.user?.username || "Utilisateur inconnu";
           const messageUserColor =
             message.userColor || message.user?.color || "#E5E7EB";
+          const messageUserAvatar = message.userAvatar || message.user?.avatar;
+
+          // Créer un objet utilisateur pour l'avatar
+          const messageUser = {
+            id: messageUserId,
+            username: messageUsername,
+            color: messageUserColor,
+            avatar: messageUserAvatar,
+          };
 
           // Déterminer si le message est de l'utilisateur actuel
           const isCurrentUser = currentUser && messageUserId === currentUser.id;
@@ -62,8 +97,12 @@ const MessageList = ({ messages, currentUser }) => {
               key={message.id}
               className={`flex ${
                 isCurrentUser ? "justify-end" : "justify-start"
-              } w-full`}
+              } w-full items-start space-x-2`}
             >
+              {!isCurrentUser && (
+                <div className="flex-shrink-0">{renderAvatar(messageUser)}</div>
+              )}
+
               <div
                 className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
                   isCurrentUser
@@ -90,6 +129,10 @@ const MessageList = ({ messages, currentUser }) => {
                   })}
                 </div>
               </div>
+
+              {isCurrentUser && (
+                <div className="flex-shrink-0">{renderAvatar(currentUser)}</div>
+              )}
             </div>
           );
         })}

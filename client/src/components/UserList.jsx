@@ -22,6 +22,29 @@ const UserList = ({
     }
   };
 
+  // Fonction pour afficher l'avatar ou un avatar par défaut
+  const renderAvatar = (user) => {
+    if (user?.avatar) {
+      return (
+        <img
+          src={user.avatar}
+          alt={`Avatar de ${user.username}`}
+          className="w-6 h-6 rounded-full object-cover mr-2"
+        />
+      );
+    }
+
+    // Utiliser la couleur comme avatar par défaut
+    return (
+      <span
+        className="w-6 h-6 rounded-full mr-2 flex items-center justify-center text-white text-xs font-medium"
+        style={{ backgroundColor: user.color || "#CCCCCC" }}
+      >
+        {user.username[0].toUpperCase()}
+      </span>
+    );
+  };
+
   // État pour afficher ou masquer le tooltip d'aide
   const [showTooltip, setShowTooltip] = React.useState(false);
 
@@ -62,12 +85,7 @@ const UserList = ({
             <li key={currentUserFromList.id} className="mb-2">
               <div className="p-1 bg-blue-50 rounded">
                 <div className="flex items-center">
-                  <span
-                    className="w-3 h-3 rounded-full mr-2"
-                    style={{
-                      backgroundColor: currentUserFromList.color || "#000",
-                    }}
-                  ></span>
+                  {renderAvatar(currentUserFromList)}
                   <span className="font-bold">
                     {currentUserFromList.username}{" "}
                     <span className="text-blue-600 text-xs">(moi)</span>
@@ -91,10 +109,7 @@ const UserList = ({
                 onClick={() => handleUserClick(user)}
                 title="Cliquez pour démarrer une discussion privée"
               >
-                <span
-                  className="w-3 h-3 rounded-full mr-2"
-                  style={{ backgroundColor: user.color || "#CCCCCC" }}
-                ></span>
+                {renderAvatar(user)}
                 <span>{user.username}</span>
                 {typingUsers.includes(user.id) && (
                   <span className="ml-2 text-xs text-gray-500 italic">
