@@ -20,12 +20,7 @@ const RoomList = ({
 
   // Fonction pour formater le nom d'un salon privé
   const formatPrivateRoomName = (room) => {
-    // Si le nom est déjà personnalisé, l'utiliser tel quel
-    if (room.name && !room.name.startsWith("Chat avec ")) {
-      return room.name;
-    }
-
-    // Essayer d'extraire les IDs utilisateur depuis l'ID du salon
+    // Pour les salons privés, extraire les IDs utilisateur depuis l'ID du salon
     if (room.id.startsWith("private_")) {
       const participantPart = room.id.replace("private_", "");
       const participantIds = participantPart.split("_").map(Number);
@@ -34,12 +29,32 @@ const RoomList = ({
       if (currentUser && participantIds.includes(currentUser.id)) {
         const otherUserId = participantIds.find((id) => id !== currentUser.id);
 
-        // Si le nom du salon contient déjà un nom d'utilisateur, l'utiliser
-        if (room.name && room.name.includes("Chat avec ")) {
-          return room.name;
+        // Si le nom du salon est au format "Chat entre X et Y", extraire le nom de l'autre utilisateur
+        if (room.name && room.name.startsWith("Chat entre ")) {
+          // Extraire les noms des participants
+          const nameMatch = room.name.match(/Chat entre (.+) et (.+)/);
+          if (nameMatch) {
+            const [, name1, name2] = nameMatch;
+            // Déterminer quel nom n'est pas celui de l'utilisateur actuel
+            const otherUserName =
+              name1 === currentUser.username ? name2 : name1;
+            return `Chat avec ${otherUserName}`;
+          }
         }
 
-        // Sinon, retourner un format générique
+        // Si le nom est déjà au format "Chat avec X", vérifier que X n'est pas l'utilisateur actuel
+        if (room.name && room.name.startsWith("Chat avec ")) {
+          const otherUserName = room.name.replace("Chat avec ", "");
+
+          // Si le nom dans "Chat avec" est celui de l'utilisateur actuel, c'est incorrect
+          if (otherUserName === currentUser.username) {
+            return `Chat privé #${otherUserId}`;
+          } else {
+            return room.name;
+          }
+        }
+
+        // Sinon, retourner un format générique avec l'ID
         return `Chat privé #${otherUserId}`;
       }
     }

@@ -6,8 +6,45 @@ export class RoomService {
   constructor(private prisma: PrismaService) {}
 
   async createRoom(id: string, name: string, isPrivate: boolean = false) {
+    // Pour les salons privés, s'assurer que le nom n'est pas juste l'ID
+    let finalName = name;
+    if (isPrivate && id.startsWith('private_') && (name === id || !name)) {
+      const participantIds = id
+        .replace('private_', '')
+        .split('_')
+        .map(Number)
+        .filter((n) => !isNaN(n));
+
+      if (participantIds.length === 2) {
+        // Récupérer les noms des participants pour créer un nom plus descriptif
+        try {
+          const participants = await this.prisma.user.findMany({
+            where: {
+              id: {
+                in: participantIds,
+              },
+            },
+            select: {
+              id: true,
+              username: true,
+            },
+          });
+
+          if (participants.length === 2) {
+            finalName = `Chat entre ${participants[0].username} et ${participants[1].username}`;
+          }
+        } catch (error) {
+          console.error(
+            '[ROOM_SERVICE] Erreur lors de la génération du nom:',
+            error,
+          );
+          finalName = `Conversation privée`;
+        }
+      }
+    }
+
     return this.prisma.room.create({
-      data: { id, name, isPrivate },
+      data: { id, name: finalName, isPrivate },
     });
   }
 
@@ -29,18 +66,77 @@ export class RoomService {
       return existingRoom;
     }
 
+    // Générer un nom approprié pour les nouveaux salons privés
+    let finalName = name || id;
+    if (isPrivate && id.startsWith('private_')) {
+      const participantIds = id
+        .replace('private_', '')
+        .split('_')
+        .map(Number)
+        .filter((n) => !isNaN(n));
+
+      if (participantIds.length === 2) {
+        try {
+          const participants = await this.prisma.user.findMany({
+            where: {
+              id: {
+                in: participantIds,
+              },
+            },
+            select: {
+              id: true,
+              username: true,
+            },
+          });
+
+          if (participants.length === 2) {
+            // Trier les participants par ID pour correspondre à l'ordre de l'ID du salon
+            participants.sort((a, b) => a.id - b.id);
+            finalName = `Chat entre ${participants[0].username} et ${participants[1].username}`;
+          }
+        } catch (error) {
+          console.error(
+            '[ROOM_SERVICE] Erreur lors de la génération du nom:',
+            error,
+          );
+          finalName = `Conversation privée`;
+        }
+      }
+    }
+
     return this.prisma.room.create({
       data: {
         id,
-        name: name || id,
+        name: finalName,
         isPrivate,
       },
     });
   }
 
   async addUserToRoom(userId: number, roomId: string) {
-    return this.prisma.userRoom.create({
-      data: { userId, roomId },
+    // Validation supplémentaire pour les salons privés
+    if (roomId.startsWith('private_')) {
+      const participantIds = roomId
+        .replace('private_', '')
+        .split('_')
+        .map(Number)
+        .filter((id) => !isNaN(id));
+
+      // Vérifier que l'utilisateur est autorisé pour ce salon privé
+      if (participantIds.length === 2 && !participantIds.includes(userId)) {
+        console.error(
+          `[ROOM_SERVICE] ERREUR: Tentative d'ajout de l'utilisateur ${userId} au salon privé ${roomId} non autorisé (participants: ${participantIds.join(', ')})`,
+        );
+        throw new Error(`Utilisateur non autorisé pour ce salon privé`);
+      }
+    }
+
+    return this.prisma.userRoom.upsert({
+      where: {
+        userId_roomId: { userId, roomId },
+      },
+      update: {},
+      create: { userId, roomId },
     });
   }
 
@@ -121,30 +217,51 @@ export class RoomService {
   }
 
   async getPrivateRoomsForUser(userId: number) {
-    // D'abord, récupérer tous les salons privés
-    const allPrivateRooms = await this.prisma.room.findMany({
+    // Récupérer seulement les salons privés où l'utilisateur a explicitement rejoint (table UserRoom)
+    const userRooms = await this.prisma.userRoom.findMany({
       where: {
-        isPrivate: true,
+        userId,
+        room: {
+          isPrivate: true,
+        },
       },
-      select: {
-        id: true,
-        name: true,
-        isPrivate: true,
+      include: {
+        room: {
+          select: {
+            id: true,
+            name: true,
+            isPrivate: true,
+          },
+        },
       },
     });
 
-    // Filtrer les salons privés qui impliquent cet utilisateur
-    // Format attendu: private_userId1_userId2
-    return allPrivateRooms.filter((room) => {
-      // Vérifier si l'ID du salon commence par "private_"
-      if (!room.id.startsWith('private_')) return false;
+    userRooms.forEach((ur, index) => {});
 
-      // Extraire les IDs des participants
-      const participantPart = room.id.replace('private_', '');
-      const participantIds = participantPart.split('_').map(Number);
+    const rooms = userRooms.map((userRoom) => userRoom.room);
 
-      // Vérifier si l'utilisateur fait partie des participants
-      return participantIds.includes(userId);
+    // Validation supplémentaire pour les salons privés avec format private_X_Y
+    const validatedRooms = rooms.filter((room) => {
+      if (room.id.startsWith('private_')) {
+        const participantIds = room.id
+          .replace('private_', '')
+          .split('_')
+          .map(Number)
+          .filter((id) => !isNaN(id));
+
+        const isValidParticipant = participantIds.includes(userId);
+
+        if (!isValidParticipant) {
+          console.error(
+            `[ROOM_SERVICE] ERREUR: Utilisateur ${userId} n'est pas autorisé dans le salon ${room.id} (participants: ${participantIds.join(', ')})`,
+          );
+        }
+
+        return isValidParticipant;
+      }
+      return true; // Pour les autres types de salons privés
     });
+
+    return validatedRooms;
   }
 }

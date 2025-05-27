@@ -25,21 +25,26 @@ const LoginPage = () => {
 
   // Déconnecter toute session WebSocket existante
   useEffect(() => {
-    console.log("LoginPage - Déconnexion de toute session WebSocket existante");
-
     // Vérifier si l'on vient de se déconnecter
     if (location.state?.justLoggedOut) {
-      // Nettoyer le localStorage pour éviter les problèmes de session
-      console.log("Déconnexion récente détectée, nettoyage du localStorage");
       localStorage.removeItem("token");
+
+      // Nettoyer l'état pour éviter les redirections en boucle
+      window.history.replaceState({}, document.title, window.location.pathname);
     }
 
-    // Déconnecter le socket de manière asynchrone
+    // Déconnecter le socket de manière asynchrone avec protection
     const timer = setTimeout(() => {
-      socketService.disconnect();
-    }, 0);
+      try {
+        socketService.disconnect();
+      } catch (error) {
+        console.error("✗ Erreur lors de la déconnexion du socket:", error);
+      }
+    }, 100);
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+    };
   }, [location.state]);
 
   // Vérifier si l'utilisateur vient de s'inscrire
@@ -81,11 +86,8 @@ const LoginPage = () => {
     setSuccessMessage("");
     setIsLoading(true);
 
-    console.log("Tentative de connexion avec:", formData.email);
-
     try {
       const apiUrl = "http://localhost:3000/auth/login";
-      console.log("Envoi requête à:", apiUrl);
 
       // Appel à l'API pour se connecter
       const response = await fetch(apiUrl, {
@@ -97,8 +99,6 @@ const LoginPage = () => {
       });
 
       if (!isMountedRef.current) return;
-
-      console.log("Statut de la réponse:", response.status);
 
       if (!response.ok) {
         const errorData = await response.json().catch((e) => ({
@@ -112,18 +112,12 @@ const LoginPage = () => {
       }
 
       const data = await response.json();
-      console.log("Connexion réussie:", data);
 
       // Vérification et enregistrement du token dans le localStorage
       if (data.access_token) {
         localStorage.setItem("token", data.access_token);
-        console.log(
-          "Token accès enregistré:",
-          data.access_token.substring(0, 20) + "..."
-        );
       } else if (data.token) {
         localStorage.setItem("token", data.token);
-        console.log("Token enregistré:", data.token.substring(0, 20) + "...");
       } else {
         console.error("Pas de token dans la réponse:", data);
         throw new Error("Pas de token dans la réponse du serveur");

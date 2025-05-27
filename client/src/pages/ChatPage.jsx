@@ -9,6 +9,7 @@ import ProfileModal from "../components/ProfileModal";
 import Avatar from "../components/Avatar";
 import socketService from "../services/socketService";
 import { updateUserColor, updateUserAvatar } from "../services/userService";
+import { logout as authLogout } from "../services/authService";
 import { v4 as uuidv4 } from "uuid";
 import { FiSettings } from "react-icons/fi";
 
@@ -27,15 +28,17 @@ const ChatPage = () => {
   const messageIdRef = useRef(new Set()); // Pour suivre les messages déjà affichés
 
   useEffect(() => {
+    // Check for multiple instances
+    if (window.chatPageInstance) {
+      console.warn("⚠️ ATTENTION: Une autre instance de ChatPage existe déjà!");
+    }
+    window.chatPageInstance = Date.now();
+
     // Mark as mounted
     isMountedRef.current = true;
 
     // Récupérer le token JWT du localStorage
     const token = localStorage.getItem("token");
-    console.log(
-      "Token récupéré:",
-      token ? `${token.substring(0, 20)}...` : "aucun token"
-    );
 
     if (!token) {
       // When navigating away immediately, mark as unmounted first
@@ -65,6 +68,7 @@ const ChatPage = () => {
       { event: "typing", handler: handleTyping },
       { event: "userColorChanged", handler: handleUserColorChanged },
       { event: "roomCreated", handler: handleRoomCreated },
+      { event: "roomCreationError", handler: handleRoomCreationError },
       { event: "roomList", handler: handleRoomList },
       { event: "roomUserList", handler: handleRoomUserList },
       { event: "userAvatarChanged", handler: handleUserAvatarChanged },
@@ -75,11 +79,9 @@ const ChatPage = () => {
     const connectTimeout = setTimeout(() => {
       if (!isMountedRef.current) return; // Skip if component unmounted
 
-      console.log("[DEBUG] Initialisation de la connexion WebSocket");
       socketService.connect(token);
 
       // Écouter les événements
-      console.log("[DEBUG] Ajout des écouteurs d'événements");
       eventHandlers.forEach(({ event, handler }) => {
         socketService.on(event, handler);
       });
@@ -92,33 +94,61 @@ const ChatPage = () => {
       });
 
       // Rejoindre la salle général par défaut
-      console.log("[DEBUG] Rejoindre la salle général");
       socketService.joinRoom("general");
     }, 300);
 
     // Nettoyage à la déconnexion
     return () => {
-      console.log(
-        "[DEBUG] Nettoyage du composant ChatPage - déconnexion du socket"
-      );
       // Annuler le timeout si la déconnexion arrive avant
       clearTimeout(connectTimeout);
+
+      // Cancel any pending logout timeout
+      if (window.logoutTimeout) {
+        clearTimeout(window.logoutTimeout);
+        window.logoutTimeout = null;
+      }
+
       // Mark as unmounted to prevent state updates after the component is gone
       isMountedRef.current = false;
+
       // Cancel any pending timeouts
       Object.values(typingTimeoutsRef.current).forEach(clearTimeout);
       typingTimeoutsRef.current = {};
+
       // Vider l'ensemble des messages
       messageIdRef.current.clear();
 
       // Remove all event listeners properly
       eventHandlers.forEach(({ event }) => {
-        socketService.off(event);
+        try {
+          socketService.off(event);
+        } catch (error) {
+          console.error(`✗ Erreur cleanup écouteur '${event}':`, error);
+        }
       });
-      socketService.off("error");
+
+      try {
+        socketService.off("error");
+      } catch (error) {
+        console.error("✗ Erreur cleanup écouteur 'error':", error);
+      }
 
       // Disconnect socket
-      socketService.disconnect();
+      try {
+        socketService.disconnect();
+      } catch (error) {
+        console.error("✗ Erreur déconnexion socket dans cleanup:", error);
+      }
+
+      // Clean up instance tracker
+      if (window.chatPageInstance) {
+        delete window.chatPageInstance;
+      }
+
+      // Clean up logout flag
+      if (window.logoutInProgress) {
+        window.logoutInProgress = false;
+      }
     };
   }, [navigate]);
 
@@ -126,38 +156,23 @@ const ChatPage = () => {
   const handleUserConnected = (data) => {
     if (!isMountedRef.current) return; // Prevent state update after unmount
 
-    console.log("handleUserConnected:", data);
-    console.log("Socket ID:", socketService.socket.id);
-    console.log(
-      "CurrentUserId from socketService:",
-      socketService.currentUserId
-    );
-
     // Si data.user existe, utilisez-le
     if (data.user) {
-      console.log("Définition de l'utilisateur actuel depuis data.user");
       setCurrentUser(data.user);
-      console.log("Utilisateur actuel défini:", data.user);
 
       // Stocker l'ID de l'utilisateur dans localStorage pour les reconnexions
       if (data.isCurrentUser) {
         localStorage.setItem("currentUserId", data.user.id);
         localStorage.setItem("currentUsername", data.user.username);
-        console.log("ID utilisateur actuel sauvegardé:", data.user.id);
       }
     } else {
       // Sinon, utilisez data directement (format legacy)
-      console.log(
-        "Définition de l'utilisateur actuel depuis data (format legacy)"
-      );
       setCurrentUser(data);
-      console.log("Utilisateur actuel défini (format legacy):", data);
 
       // Format legacy - stocker ID si disponible
       if (data.id) {
         localStorage.setItem("currentUserId", data.id);
         localStorage.setItem("currentUsername", data.username || "Utilisateur");
-        console.log("ID utilisateur actuel sauvegardé (legacy):", data.id);
       }
     }
     showNotification("info", "Connecté au serveur");
@@ -171,12 +186,9 @@ const ChatPage = () => {
   const handleNewMessage = (data) => {
     if (!isMountedRef.current) return; // Prevent state update after unmount
 
-    console.log("[DEBUG] Nouveau message reçu:", data);
-
     // Vérifier si le message a déjà été traité
     const messageId = data.id || (data.message && data.message.id);
     if (messageId && messageIdRef.current.has(messageId)) {
-      console.log(`[DEBUG] Message déjà affiché, ignoré (ID: ${messageId})`);
       return;
     }
 
@@ -195,28 +207,29 @@ const ChatPage = () => {
       }
     }
 
-    // Ajouter des informations de débogage
-    console.log("[DEBUG] Message ajouté:", messageToAdd);
-    console.log("[DEBUG] Utilisateur actuel:", currentUser);
-
     setMessages((prev) => [...prev, messageToAdd]);
   };
 
   const handleRoomHistory = (data) => {
     if (!isMountedRef.current) return; // Prevent state update after unmount
 
-    console.log("Historique de la salle reçu:", data);
     // Le serveur peut renvoyer directement les messages ou un objet {messages, users}
     const historyMessages = data.messages || data;
     const roomParticipants = data.users || [];
+
+    // Appliquer l'historique même si currentRoom n'est pas encore mis à jour
+    // (React peut avoir un délai dans la mise à jour de state)
     setMessages(historyMessages);
     setRoomUsers(roomParticipants);
+
+    // Si le roomId est fourni et différent du currentRoom, mettre à jour currentRoom
+    if (data.roomId && data.roomId !== currentRoom) {
+      setCurrentRoom(data.roomId);
+    }
   };
 
   const handleUserJoinedRoom = (data) => {
     if (!isMountedRef.current) return; // Prevent state update after unmount
-
-    console.log("User joined room event:", data);
 
     // Vérification que data et data.user existent
     if (!data || !data.user) {
@@ -250,8 +263,6 @@ const ChatPage = () => {
   const handleUserLeftRoom = (data) => {
     if (!isMountedRef.current) return; // Prevent state update after unmount
 
-    console.log("User left room event:", data);
-
     // Vérification des données
     if (!data) {
       console.warn("Données d'utilisateur quitté invalides");
@@ -275,8 +286,6 @@ const ChatPage = () => {
 
   const handleTyping = (data) => {
     if (!isMountedRef.current) return; // Prevent state update after unmount
-
-    console.log("Typing event:", data);
 
     // Vérification des données
     if (!data || typeof data.isTyping !== "boolean") {
@@ -321,8 +330,6 @@ const ChatPage = () => {
   const handleUserJoined = (data) => {
     if (!isMountedRef.current) return; // Prevent state update after unmount
 
-    console.log("Nouvel utilisateur connecté:", data);
-
     if (data.user) {
       // Ajouter l'utilisateur à la liste des utilisateurs de la salle si pas déjà présent
       setRoomUsers((prev) => {
@@ -340,8 +347,11 @@ const ChatPage = () => {
   const handleRoomSelect = (roomId) => {
     if (currentRoom !== roomId) {
       socketService.leaveRoom(currentRoom);
+
       socketService.joinRoom(roomId);
+
       setCurrentRoom(roomId);
+
       setMessages([]);
     }
   };
@@ -356,9 +366,6 @@ const ChatPage = () => {
   };
 
   const handleSendMessage = (content) => {
-    console.log(
-      `[DEBUG] Envoi de message dans la salle ${currentRoom}: "${content}"`
-    );
     socketService.sendMessage(currentRoom, content);
   };
 
@@ -367,45 +374,94 @@ const ChatPage = () => {
   };
 
   const handleLogout = () => {
-    console.log("Déconnexion de l'utilisateur:", currentUser?.username);
+    // Prevent multiple simultaneous logout attempts
+    if (!isMountedRef.current) {
+      return;
+    }
+
+    // Check if logout is already in progress
+    if (window.logoutInProgress) {
+      return;
+    }
+
+    // Mark logout as in progress
+    window.logoutInProgress = true;
 
     // Mark component as unmounted immediately to prevent any further state updates
     isMountedRef.current = false;
 
-    // Remove socket event listeners first to prevent any callbacks during logout
-    const events = [
-      "userConnected",
-      "userJoined",
-      "userDisconnected",
-      "newMessage",
-      "roomHistory",
-      "userJoinedRoom",
-      "userLeftRoom",
-      "typing",
-      "userColorChanged",
-      "roomCreated",
-      "roomList",
-      "roomUserList",
-      "error",
-      "userAvatarChanged",
-    ];
+    try {
+      // Remove socket event listeners first to prevent any callbacks during logout
+      const events = [
+        "userConnected",
+        "userJoined",
+        "userDisconnected",
+        "newMessage",
+        "roomHistory",
+        "userJoinedRoom",
+        "userLeftRoom",
+        "typing",
+        "userColorChanged",
+        "roomCreated",
+        "roomList",
+        "roomUserList",
+        "error",
+        "userAvatarChanged",
+        "userStatusChanged",
+      ];
 
-    events.forEach((event) => {
-      socketService.off(event);
-    });
+      events.forEach((event) => {
+        try {
+          socketService.off(event);
+        } catch (error) {
+          console.error(`✗ Erreur suppression écouteur '${event}':`, error);
+        }
+      });
 
-    // Disconnect socket
-    socketService.disconnect();
+      // Disconnect socket
+      try {
+        socketService.disconnect();
+      } catch (error) {
+        console.error("✗ Erreur déconnexion socket:", error);
+      }
 
-    // Clear local storage after socket disconnection
-    localStorage.removeItem("token");
-    localStorage.removeItem("currentUserId");
-    localStorage.removeItem("currentUsername");
+      // Clear local storage after socket disconnection
+      try {
+        const tokenBefore = localStorage.getItem("token");
 
-    // Use a slight delay before navigation to ensure all async operations complete
-    setTimeout(() => {
-      navigate("/login", { state: { justLoggedOut: true } });
-    }, 50);
+        // Utiliser le service d'authentification pour une déconnexion propre
+        authLogout();
+        localStorage.removeItem("currentUserId");
+        localStorage.removeItem("currentUsername");
+      } catch (error) {
+        console.error("✗ Erreur nettoyage localStorage:", error);
+      }
+
+      // Use a slight delay before navigation to ensure all async operations complete
+      const navigationTimeout = setTimeout(() => {
+        try {
+          navigate("/login", { state: { justLoggedOut: true }, replace: true });
+        } catch (error) {
+          console.error("✗ Erreur navigation:", error);
+          // Fallback: navigation forcée
+          window.location.href = "/login";
+        }
+      }, 100);
+
+      // Store timeout ID for potential cleanup
+      window.logoutTimeout = navigationTimeout;
+    } catch (error) {
+      console.error("=== ERREUR CRITIQUE DÉCONNEXION ===", error);
+      // Emergency logout: force navigation
+      window.location.href = "/login";
+    } finally {
+      // Reset logout flag after a delay to prevent permanent lock
+      setTimeout(() => {
+        if (window.logoutInProgress) {
+          window.logoutInProgress = false;
+        }
+      }, 2000);
+    }
   };
 
   const showNotification = (type, message) => {
@@ -434,11 +490,12 @@ const ChatPage = () => {
     };
   }, []); // Empty dependency array is correct here as we only want this to run on mount/unmount
 
+  // Suivre les changements de salon
+  useEffect(() => {}, [currentRoom, messages.length, roomUsers.length]);
+
   // Gestionnaire pour les mises à jour de couleur des utilisateurs
   const handleUserColorChanged = (data) => {
     if (!isMountedRef.current) return; // Prevent state update after unmount
-
-    console.log("[COLOR] Mise à jour de couleur reçue:", data);
 
     // Mettre à jour la couleur de l'utilisateur dans la liste des utilisateurs
     setRoomUsers((prev) => {
@@ -466,8 +523,6 @@ const ChatPage = () => {
 
     // Si c'est l'utilisateur actuellement connecté, mettre à jour son état
     if (currentUser && currentUser.id === data.userId) {
-      console.log(`[COLOR] Mise à jour de ma propre couleur: ${data.color}`);
-
       // Mettre à jour l'état local
       setCurrentUser((prev) => ({
         ...prev,
@@ -482,14 +537,10 @@ const ChatPage = () => {
           const userData = JSON.parse(userDataString);
           userData.color = data.color;
           localStorage.setItem("userData", JSON.stringify(userData));
-          console.log(
-            `[COLOR] Couleur mise à jour dans userData: ${data.color}`
-          );
         }
 
         // Mise à jour directe si userData n'existe pas
         localStorage.setItem("userColor", data.color);
-        console.log(`[COLOR] Couleur mise à jour directement: ${data.color}`);
       } catch (error) {
         console.error(
           "[COLOR] Erreur lors de la mise à jour du localStorage:",
@@ -505,9 +556,6 @@ const ChatPage = () => {
       if (headerColorDot) {
         const headerUserId = headerColorDot.getAttribute("data-user-id");
         if (headerUserId && parseInt(headerUserId) === data.userId) {
-          console.log(
-            `[COLOR] Force mise à jour de la pastille de couleur dans le header: ${data.color}`
-          );
           headerColorDot.style.backgroundColor = data.color;
         }
       }
@@ -516,9 +564,6 @@ const ChatPage = () => {
       if (currentUser && currentUser.id !== data.userId) {
         const headerUsername = document.getElementById("header-username");
         if (headerUsername && headerUsername.textContent === data.username) {
-          console.log(
-            `[COLOR] Détection d'incohérence - mise à jour forcée de currentUser`
-          );
           setCurrentUser((prev) => ({
             ...prev,
             color: data.color,
@@ -551,10 +596,6 @@ const ChatPage = () => {
           (msg.userId === data.userId || msg.user?.id === data.userId)
       ).length;
 
-      console.log(
-        `[COLOR] ${changedCount} messages mis à jour avec la nouvelle couleur`
-      );
-
       return updatedMessages;
     });
   };
@@ -563,22 +604,47 @@ const ChatPage = () => {
   const handleRoomCreated = (data) => {
     if (!isMountedRef.current) return; // Prevent state update after unmount
 
-    console.log("Nouveau salon créé:", data);
-    // Ne pas ajouter le salon s'il existe déjà
+    // Ajouter le salon à la liste s'il n'existe pas déjà
     setRooms((prev) => {
       if (!prev.some((room) => room.id === data.roomId)) {
-        return [...prev, { id: data.roomId, name: data.roomName }];
+        const newRoom = {
+          id: data.roomId,
+          name: data.roomName,
+          isPrivate: data.isPrivate || false,
+        };
+        return [...prev, newRoom];
       }
       return prev;
     });
+
+    // Si c'est un salon privé créé par l'utilisateur actuel, y naviguer automatiquement
+    if (data.isPrivate && data.roomId.startsWith("private_")) {
+      const participantIds = data.roomId
+        .replace("private_", "")
+        .split("_")
+        .map(Number);
+      if (currentUser && participantIds.includes(currentUser.id)) {
+        handleRoomSelect(data.roomId);
+        showNotification("success", `Conversation privée créée avec succès`);
+        return;
+      }
+    }
+
     showNotification("info", `Nouveau salon créé: ${data.roomName}`);
+  };
+
+  // Gestionnaire pour les erreurs de création de salon
+  const handleRoomCreationError = (data) => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
+
+    console.error("Erreur lors de la création du salon:", data);
+    showNotification("error", data.message || "Échec de la création du salon");
   };
 
   // Gestionnaire pour la liste initiale des salons
   const handleRoomList = (data) => {
     if (!isMountedRef.current) return; // Prevent state update after unmount
 
-    console.log("Liste des salons reçue:", data);
     if (data.rooms && Array.isArray(data.rooms)) {
       // Filtrer le salon "general" et enlever les doublons par ID
       const uniqueRooms = data.rooms
@@ -609,8 +675,6 @@ const ChatPage = () => {
   const handleRoomUserList = (data) => {
     if (!isMountedRef.current) return; // Prevent state update after unmount
 
-    console.log("[USERS] Liste d'utilisateurs mise à jour reçue:", data);
-
     // Vérifier si c'est pour la salle actuelle
     if (data.roomId === currentRoom && data.users) {
       // Comparaison avant/après pour détecter les changements
@@ -633,44 +697,8 @@ const ChatPage = () => {
           );
         });
 
-        // Logs de débogage
-        if (addedUsers.length > 0) {
-          console.log(
-            `[USERS] ${addedUsers.length} utilisateurs ajoutés:`,
-            addedUsers
-          );
-        }
-        if (removedUsers.length > 0) {
-          console.log(
-            `[USERS] ${removedUsers.length} utilisateurs retirés:`,
-            removedUsers
-          );
-        }
-        if (changedUsers.length > 0) {
-          console.log(
-            `[USERS] ${changedUsers.length} utilisateurs modifiés:`,
-            changedUsers.map((newUser) => {
-              const oldUser = prev.find((u) => u.id === newUser.id);
-              return {
-                id: newUser.id,
-                username: newUser.username,
-                ancienneCouleur: oldUser?.color,
-                nouvelleCouleur: newUser.color,
-              };
-            })
-          );
-        }
-
-        console.log(
-          `[USERS] Liste des utilisateurs mise à jour pour ${currentRoom}: ${data.users.length} utilisateurs`
-        );
-
         return data.users;
       });
-    } else {
-      console.log(
-        `[USERS] Liste ignorée car salle différente (actuelle: ${currentRoom}, reçue: ${data.roomId})`
-      );
     }
   };
 
@@ -762,8 +790,6 @@ const ChatPage = () => {
   const handleUserAvatarChanged = (data) => {
     if (!isMountedRef.current) return; // Prevent state update after unmount
 
-    console.log("[AVATAR] Mise à jour d'avatar reçue:", data);
-
     // Mettre à jour l'avatar de l'utilisateur dans la liste des utilisateurs
     setRoomUsers((prev) => {
       return prev.map((user) =>
@@ -802,8 +828,6 @@ const ChatPage = () => {
   // Gestionnaire pour les mises à jour de statut en ligne des utilisateurs
   const handleUserStatusChanged = (data) => {
     if (!isMountedRef.current) return; // Prevent state update after unmount
-
-    console.log("[STATUS] Mise à jour de statut reçue:", data);
 
     // Mettre à jour le statut de l'utilisateur dans la liste des utilisateurs
     setRoomUsers((prev) => {
@@ -845,20 +869,20 @@ const ChatPage = () => {
     const existingRoom = rooms.find((room) => room.id === privateRoomId);
 
     if (!existingRoom) {
-      // Créer la salle si elle n'existe pas
+      // Créer la salle si elle n'existe pas - ATTENDRE la confirmation du serveur
+
       socketService.createRoom(privateRoomId, roomName, true); // true = salon privé
 
-      // Ajouter directement à la liste locale pour réactivité immédiate
-      setRooms((prev) => [
-        ...prev,
-        { id: privateRoomId, name: roomName, isPrivate: true },
-      ]);
+      // NE PAS ajouter directement à la liste locale - attendre la confirmation du serveur
+      showNotification("info", "Création de la conversation privée...");
+    } else {
+      // Changer vers cette salle existante
+      handleRoomSelect(privateRoomId);
+      showNotification(
+        "info",
+        `Conversation privée avec ${otherUser.username}`
+      );
     }
-
-    // Changer vers cette salle
-    handleRoomSelect(privateRoomId);
-
-    showNotification("info", `Conversation privée avec ${otherUser.username}`);
   };
 
   return (

@@ -23,11 +23,8 @@ const RegisterPage = () => {
     setError("");
     setIsLoading(true);
 
-    console.log("Tentative d'inscription avec les données:", formData);
-
     try {
       const apiUrl = "http://localhost:3000/auth/register";
-      console.log("Envoi requête à:", apiUrl);
 
       // Appel à l'API NestJS
       const response = await fetch(apiUrl, {
@@ -37,8 +34,6 @@ const RegisterPage = () => {
         },
         body: JSON.stringify(formData),
       });
-
-      console.log("Statut de la réponse:", response.status);
 
       if (!response.ok) {
         const errorData = await response.json().catch((e) => ({
@@ -52,16 +47,11 @@ const RegisterPage = () => {
       }
 
       const data = await response.json();
-      console.log("Réponse de l'API:", data);
 
       // Vérification et stockage du token si présent
       if (data.access_token) {
         // L'API renvoie maintenant un token - connecter directement l'utilisateur
         localStorage.setItem("token", data.access_token);
-        console.log(
-          "Token d'accès enregistré:",
-          data.access_token.substring(0, 20) + "..."
-        );
 
         // Redirection directe vers le chat
         navigate("/chat");

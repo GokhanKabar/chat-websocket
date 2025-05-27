@@ -18,14 +18,6 @@ const MessageList = ({ messages, currentUser }) => {
     scrollToBottom();
   }, [messages]);
 
-  // Pour le débogage
-  useEffect(() => {
-    if (messages && messages.length > 0) {
-      console.log("Format du premier message:", messages[0]);
-    }
-    console.log("Current user:", currentUser);
-  }, [messages, currentUser]);
-
   // Fonction pour afficher l'avatar avec le composant Avatar
   const renderAvatar = (user) => {
     return <Avatar user={user} size="w-8 h-8" showStatus={false} />;
