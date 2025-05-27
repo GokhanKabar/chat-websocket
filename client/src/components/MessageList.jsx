@@ -1,4 +1,5 @@
 import React, { useRef, useEffect } from "react";
+import Avatar from "./Avatar";
 
 const MessageList = ({ messages, currentUser }) => {
   const messagesEndRef = useRef(null);
@@ -25,30 +26,9 @@ const MessageList = ({ messages, currentUser }) => {
     console.log("Current user:", currentUser);
   }, [messages, currentUser]);
 
-  // Fonction pour afficher l'avatar ou un avatar par défaut
+  // Fonction pour afficher l'avatar avec le composant Avatar
   const renderAvatar = (user) => {
-    if (user?.avatar) {
-      return (
-        <img
-          src={user.avatar}
-          alt={`Avatar de ${user.username}`}
-          className="w-8 h-8 rounded-full object-cover"
-        />
-      );
-    }
-
-    // Avatar par défaut avec l'initiale de l'utilisateur
-    const initial = (user?.username || "U")[0].toUpperCase();
-    const bgColor = user?.color || "#E5E7EB";
-
-    return (
-      <div
-        className="w-8 h-8 rounded-full flex items-center justify-center text-white font-medium"
-        style={{ backgroundColor: bgColor }}
-      >
-        {initial}
-      </div>
-    );
+    return <Avatar user={user} size="w-8 h-8" showStatus={false} />;
   };
 
   // Si pas de messages

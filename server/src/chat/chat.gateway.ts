@@ -178,6 +178,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         isCurrentUser: true,
       });
 
+      // Diffuser le changement de statut en ligne à tous les clients
+      this.server.emit('userStatusChanged', {
+        userId: user.id,
+        username: user.username,
+        isOnline: true,
+      });
+
       // Récupérer et envoyer la liste des salons disponibles
       try {
         // Récupérer les salons publics
@@ -248,12 +255,27 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         username: user.username,
       });
 
+      // Supprimer l'utilisateur de la liste des connectés AVANT de vérifier le statut
+      this.connectedUsers.delete(client.id);
+
+      // Vérifier si l'utilisateur a d'autres sessions actives
+      const stillOnline = Array.from(this.connectedUsers.values()).some(
+        (connectedUser) => connectedUser.id === user.id,
+      );
+
+      // Si l'utilisateur n'a plus de sessions actives, le marquer comme hors ligne
+      if (!stillOnline) {
+        this.server.emit('userStatusChanged', {
+          userId: user.id,
+          username: user.username,
+          isOnline: false,
+        });
+      }
+
       // Informer spécifiquement chaque salle à laquelle l'utilisateur était connecté
       // et envoyer une liste mise à jour des utilisateurs
       this.handleUserLeftRooms(client, user);
 
-      // Supprimer l'utilisateur de la liste des connectés
-      this.connectedUsers.delete(client.id);
       console.log(
         `Nombre d'utilisateurs restants: ${this.connectedUsers.size}`,
       );
@@ -820,19 +842,32 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   // Méthode pour obtenir les utilisateurs d'une salle avec leurs informations complètes
+  // Méthode pour obtenir la liste des utilisateurs en ligne
+  private getOnlineUserIds(): number[] {
+    const onlineIds: number[] = [];
+    this.connectedUsers.forEach((user) => {
+      if (!onlineIds.includes(user.id)) {
+        onlineIds.push(user.id);
+      }
+    });
+    return onlineIds;
+  }
+
   private async getRoomUsersWithCurrentInfo(
     roomId: string,
   ): Promise<
-    { id: number; username: string; color: string; avatar?: string }[]
+    { id: number; username: string; color: string; avatar?: string; isOnline?: boolean }[]
   > {
     // Récupérer les utilisateurs connectés dans cette salle
     const sockets = await this.server.in(roomId).fetchSockets();
     const connectedUserIds = new Set<number>();
+    const onlineUserIds = this.getOnlineUserIds();
     const roomUsers: {
       id: number;
       username: string;
       color: string;
       avatar?: string;
+      isOnline?: boolean;
     }[] = [];
 
     // Collecter les utilisateurs connectés avec leurs informations en temps réel
@@ -845,6 +880,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           username: roomUser.username,
           color: roomUser.color,
           avatar: roomUser.avatar,
+          isOnline: true, // Utilisateur connecté dans cette salle = en ligne
         });
       }
     }
@@ -869,6 +905,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
                 username: user.username,
                 color: user.color,
                 avatar: user.avatar || undefined,
+                isOnline: onlineUserIds.includes(user.id), // Vérifier s'il est en ligne ailleurs
               });
             }
           }

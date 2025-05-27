@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React from "react";
 import {
   BrowserRouter as Router,
   Routes,
@@ -14,8 +14,8 @@ import { isAuthenticated } from "./services/authService";
 import "./App.css";
 
 function App() {
-  // Vérifier l'authentification une seule fois par rendu
-  const auth = useMemo(() => isAuthenticated(), []);
+  // Vérifier l'authentification à chaque rendu pour détecter les changements
+  const auth = isAuthenticated();
 
   return (
     <Router>

@@ -1,5 +1,6 @@
 import React from "react";
 import { FiMessageSquare, FiInfo, FiUser } from "react-icons/fi";
+import Avatar from "./Avatar";
 
 const UserList = ({
   users = [],
@@ -22,26 +23,10 @@ const UserList = ({
     }
   };
 
-  // Fonction pour afficher l'avatar ou un avatar par défaut
+  // Fonction pour afficher l'avatar avec indicateur de statut
   const renderAvatar = (user) => {
-    if (user?.avatar) {
-      return (
-        <img
-          src={user.avatar}
-          alt={`Avatar de ${user.username}`}
-          className="w-6 h-6 rounded-full object-cover mr-2"
-        />
-      );
-    }
-
-    // Utiliser la couleur comme avatar par défaut
     return (
-      <span
-        className="w-6 h-6 rounded-full mr-2 flex items-center justify-center text-white text-xs font-medium"
-        style={{ backgroundColor: user.color || "#CCCCCC" }}
-      >
-        {user.username[0].toUpperCase()}
-      </span>
+      <Avatar user={user} size="w-6 h-6" showStatus={true} className="mr-2" />
     );
   };
 

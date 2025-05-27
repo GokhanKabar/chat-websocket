@@ -6,6 +6,7 @@ import MessageInput from "../components/MessageInput";
 import UserList from "../components/UserList";
 import Notification from "../components/Notification";
 import ProfileModal from "../components/ProfileModal";
+import Avatar from "../components/Avatar";
 import socketService from "../services/socketService";
 import { updateUserColor, updateUserAvatar } from "../services/userService";
 import { v4 as uuidv4 } from "uuid";
@@ -67,6 +68,7 @@ const ChatPage = () => {
       { event: "roomList", handler: handleRoomList },
       { event: "roomUserList", handler: handleRoomUserList },
       { event: "userAvatarChanged", handler: handleUserAvatarChanged },
+      { event: "userStatusChanged", handler: handleUserStatusChanged },
     ];
 
     // Initialiser la connexion WebSocket avec un délai pour s'assurer que la déconnexion est terminée
@@ -797,14 +799,27 @@ const ChatPage = () => {
     });
   };
 
-  // Ajout de l'écouteur d'événement pour les changements d'avatar
-  useEffect(() => {
-    socketService.on("userAvatarChanged", handleUserAvatarChanged);
+  // Gestionnaire pour les mises à jour de statut en ligne des utilisateurs
+  const handleUserStatusChanged = (data) => {
+    if (!isMountedRef.current) return; // Prevent state update after unmount
 
-    return () => {
-      socketService.off("userAvatarChanged");
-    };
-  }, []);
+    console.log("[STATUS] Mise à jour de statut reçue:", data);
+
+    // Mettre à jour le statut de l'utilisateur dans la liste des utilisateurs
+    setRoomUsers((prev) => {
+      return prev.map((user) =>
+        user.id === data.userId ? { ...user, isOnline: data.isOnline } : user
+      );
+    });
+
+    // Si c'est l'utilisateur actuellement connecté, mettre à jour son état
+    if (currentUser && currentUser.id === data.userId) {
+      setCurrentUser((prev) => ({
+        ...prev,
+        isOnline: data.isOnline,
+      }));
+    }
+  };
 
   // Fonction pour créer un salon privé avec un autre utilisateur
   const handlePrivateChat = (otherUser) => {
@@ -855,20 +870,12 @@ const ChatPage = () => {
             {currentUser && (
               <div className="flex items-center mr-2">
                 <div className="flex items-center mr-2">
-                  {currentUser.avatar ? (
-                    <img
-                      src={currentUser.avatar}
-                      alt="Avatar"
-                      className="w-8 h-8 rounded-full mr-1 object-cover"
-                    />
-                  ) : (
-                    <span
-                      id="header-color-dot"
-                      className="w-3 h-3 rounded-full mr-1 header-color-dot"
-                      style={{ backgroundColor: currentUser.color || "#000" }}
-                      data-user-id={currentUser.id}
-                    ></span>
-                  )}
+                  <Avatar
+                    user={currentUser}
+                    size="w-8 h-8"
+                    showStatus={false}
+                    className="mr-1"
+                  />
                   <span
                     id="header-username"
                     className="text-gray-700 header-username"
