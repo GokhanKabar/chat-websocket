@@ -67,12 +67,12 @@ const MessageList = ({ messages, currentUser }) => {
               <div
                 className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
                   isCurrentUser
-                    ? "bg-blue-600 text-white rounded-tr-none" // Bulle sans coin en haut à droite pour les messages de l'utilisateur
-                    : "bg-gray-200 text-gray-800 rounded-tl-none" // Bulle sans coin en haut à gauche pour les autres
+                    ? "text-white rounded-tr-none" // Suppression de bg-blue-600
+                    : "bg-gray-200 text-gray-800 rounded-tl-none"
                 } shadow-md`}
                 style={{
-                  backgroundColor: isCurrentUser ? "#1D4ED8" : messageUserColor,
-                  maxWidth: "75%", // Limiter la largeur des bulles
+                  backgroundColor: messageUserColor, // Utilisation de la couleur personnalisée pour tous les messages
+                  maxWidth: "75%",
                 }}
               >
                 {!isCurrentUser && (
